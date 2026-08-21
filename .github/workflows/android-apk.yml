@@ -84,11 +84,26 @@ jobs:
         if: github.event_name != 'pull_request'
         shell: bash
         run: |
-          apksigner_path="$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner -print | sort -V | tail -1)"
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          apksigner_path="$(command -v apksigner || true)"
+          if [[ -z "${apksigner_path}" && -n "${sdk_root}" ]]; then
+            apksigner_path="$(find "${sdk_root}/build-tools" -name apksigner -print | sort -V | tail -1)"
+          fi
+          if [[ -z "${apksigner_path}" || ! -x "${apksigner_path}" ]]; then
+            echo "::error::Could not locate an executable apksigner"
+            exit 1
+          fi
+          certificate_report="$(
+            "${apksigner_path}" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
+          )"
           actual_fingerprint="$(
-            "${apksigner_path}" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
+            printf '%s\n' "${certificate_report}" \
               | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print tolower($2); exit}'
           )"
+          if [[ -z "${actual_fingerprint}" ]]; then
+            echo "::error::Could not read the built APK signing certificate"
+            exit 1
+          fi
           if [[ "${actual_fingerprint}" != "${EXPECTED_DEBUG_CERT_SHA256}" ]]; then
             echo "::error::Built APK certificate ${actual_fingerprint} does not match the conference identity"
             exit 1
