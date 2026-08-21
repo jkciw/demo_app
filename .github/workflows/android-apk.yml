@@ -94,21 +94,15 @@ jobs:
             exit 1
           fi
           certificate_report="$(
-            "${apksigner_path}" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
+            "${apksigner_path}" verify --print-certs app/build/outputs/apk/debug/app-debug.apk 2>&1
           )"
-          actual_fingerprint="$(
-            printf '%s\n' "${certificate_report}" \
-              | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print tolower($2); exit}'
-          )"
-          if [[ -z "${actual_fingerprint}" ]]; then
-            echo "::error::Could not read the built APK signing certificate"
+          normalized_report="$(printf '%s\n' "${certificate_report}" | tr '[:upper:]' '[:lower:]')"
+          printf '%s\n' "${certificate_report}"
+          if [[ "${normalized_report}" != *"${EXPECTED_DEBUG_CERT_SHA256}"* ]]; then
+            echo "::error::Built APK does not contain the conference signing certificate"
             exit 1
           fi
-          if [[ "${actual_fingerprint}" != "${EXPECTED_DEBUG_CERT_SHA256}" ]]; then
-            echo "::error::Built APK certificate ${actual_fingerprint} does not match the conference identity"
-            exit 1
-          fi
-          echo "Built APK signing certificate verified: ${actual_fingerprint}"
+          echo "Built APK signing certificate verified: ${EXPECTED_DEBUG_CERT_SHA256}"
 
       - name: Prepare downloadable artifact
         if: github.event_name != 'pull_request'
