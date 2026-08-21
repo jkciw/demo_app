@@ -5,29 +5,34 @@ the official Meshtastic SDK `0.1.0` over BLE, broadcasts text on primary channel
 inbound text packets, and labels a broadcast delivery signal as **relayed by mesh** rather than
 claiming that a named phone received it.
 
-## Provision fixed stations
+## Pair the attached radios
 
-Pair each radio in Android first. Then create an untracked `local.properties` file:
-
-```properties
-sdk.dir=/path/to/Android/sdk
-meshA.bleAddress=AA:BB:CC:DD:EE:FF
-meshB.bleAddress=11:22:33:44:55:66
-```
-
-Build the two station APKs:
+Build the two station APKs without device-specific values:
 
 ```shell
 ./gradlew :app:assembleMeshADebug :app:assembleMeshBDebug
 ```
 
-The addresses may instead be passed as `-PmeshABleAddress=...` and `-PmeshBBleAddress=...`.
-They are hardware identifiers, not secrets. No scanner or radio configuration is exposed in the
-participant UI.
+Before the conference, pair each phone with its physically attached Meshtastic radio in Android
+Bluetooth settings and remove any stale Meshtastic pairings. On first launch the app checks the
+phone's bonded devices for Meshtastic radios. It automatically binds when exactly one is found; if
+several are paired, it asks the operator to select one. Android 12+ can also use BLE service
+discovery as a fallback. Android 8–11 deliberately avoid active discovery so system Location can
+remain off. The selection is stored only on the phone and can be cleared with **Change radio**.
+
+After permission is granted, a foreground connected-device service owns the app's single
+Meshtastic client. The persistent **radio link** notification confirms that the service is alive.
+Leaving the screen, locking the phone, or Android recreating the activity no longer closes BLE;
+**Change radio** is the operator-controlled disconnect. If the SDK declares an otherwise healthy
+idle BLE session stale, the service rebuilds the client with bounded backoff and completes a fresh
+handshake without reopening the app. For the conference, also exempt the app from the phone's
+battery optimisation and keep the official Meshtastic app closed so only one phone app owns each
+radio.
 
 ## Hardware proof
 
-Install `meshA` on M1 (paired to LT1) and `meshB` on M2 (paired to LT2). With Wi-Fi and cellular
+Install `meshA` on M1 (paired to LT1) and `meshB` on M2 (paired to LT2). Confirm that each app
+shows its attached radio's name. With Wi-Fi and cellular
 disabled, verify M1 → LT1 → LoRa → LT2 → M2, then repeat in reverse. The app cannot complete this
 test without the two phones and radios.
 

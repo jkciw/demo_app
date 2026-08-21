@@ -5,8 +5,10 @@ package network.resilientcomms.meshdemo
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,8 +21,8 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { grants ->
-        if (grants.values.all { it }) viewModel.connect() else viewModel.permissionRequired()
+    ) {
+        if (hasBluetoothPermissions()) viewModel.connect() else viewModel.permissionRequired()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,6 +31,7 @@ class MainActivity : ComponentActivity() {
             MeshDemoApp(
                 viewModel = viewModel,
                 onRetryConnection = ::ensurePermissionsAndConnect,
+                onOpenBluetoothSettings = ::openBluetoothSettings,
             )
         }
     }
@@ -42,20 +45,32 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun ensurePermissionsAndConnect() {
-        if (!isBluetoothAddress(StationConfig.bleAddress)) {
-            viewModel.connect()
-            return
-        }
         val missing = requiredPermissions().filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (missing.isEmpty()) viewModel.connect() else permissionLauncher.launch(missing.toTypedArray())
     }
 
+    private fun openBluetoothSettings() {
+        startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+    }
+
     private fun requiredPermissions(): List<String> =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            listOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(Manifest.permission.BLUETOOTH_SCAN)
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            // Android 8–11 add nothing: bonded devices can be inspected and connected
+            // without Location, and active discovery is deliberately skipped.
         }
+
+    private fun hasBluetoothPermissions(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT).all {
+                ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+            }
 }

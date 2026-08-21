@@ -14,14 +14,26 @@ enum class DemoStep {
 }
 
 enum class RadioStatus {
-    NOT_PROVISIONED,
     PERMISSION_REQUIRED,
+    SCANNING,
+    NO_PAIRED_RADIO,
+    SELECTION_REQUIRED,
     DISCONNECTED,
     CONNECTING,
     CONFIGURING,
     CONNECTED,
     RECONNECTING,
     ERROR,
+}
+
+data class DiscoveredRadio(
+    val address: String,
+    val name: String?,
+    val rssi: Int?,
+    val isBonded: Boolean,
+) {
+    val displayName: String
+        get() = name?.takeIf(String::isNotBlank) ?: "Meshtastic ${address.takeLast(5)}"
 }
 
 enum class SendProgress {
@@ -76,6 +88,9 @@ data class MeshDemoState(
     val step: DemoStep = DemoStep.HOME,
     val radioStatus: RadioStatus = RadioStatus.DISCONNECTED,
     val statusText: String = "Radio disconnected",
+    val selectedRadioAddress: String? = null,
+    val selectedRadioName: String? = null,
+    val discoveredRadios: List<DiscoveredRadio> = emptyList(),
     val draft: String = "CODEX TEST",
     val sendProgress: SendProgress = SendProgress.IDLE,
     val sendStatusText: String = "",
@@ -92,6 +107,7 @@ data class MeshDemoState(
     val bitcoinBlockHeight: Int? = null,
 ) {
     val isConnected: Boolean get() = radioStatus == RadioStatus.CONNECTED
+    val radioDisplayName: String get() = selectedRadioName ?: StationConfig.radioName
     val draftBytes: Int get() = draft.encodeToByteArray().size
     val canSend: Boolean
         get() = isConnected && draft.isNotBlank() && draftBytes <= MAX_TEXT_BYTES &&
@@ -106,6 +122,17 @@ data class MeshDemoState(
     val canRelayBitcoin: Boolean
         get() = isConnected && bitcoinRemaining > 0 && !isBitcoinRelayActive
 }
+
+internal fun pairedRadios(radios: Collection<DiscoveredRadio>): List<DiscoveredRadio> =
+    radios
+        .filter(DiscoveredRadio::isBonded)
+        .sortedWith(
+            compareByDescending<DiscoveredRadio> { it.rssi ?: Int.MIN_VALUE }
+                .thenBy { it.displayName },
+        )
+
+internal fun singlePairedRadio(radios: Collection<DiscoveredRadio>): DiscoveredRadio? =
+    pairedRadios(radios).singleOrNull()
 
 internal fun chunkSignedTransaction(
     rawHex: String,
@@ -168,3 +195,6 @@ internal fun truncateUtf8(value: String, maxBytes: Int = MAX_TEXT_BYTES): String
 
 internal fun isBluetoothAddress(value: String): Boolean =
     Regex("^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$").matches(value)
+
+internal fun isMeshtasticBluetoothName(value: String?): Boolean =
+    value?.startsWith("Meshtastic", ignoreCase = true) == true

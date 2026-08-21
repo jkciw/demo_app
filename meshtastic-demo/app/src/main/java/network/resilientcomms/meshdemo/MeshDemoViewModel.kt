@@ -5,23 +5,23 @@ package network.resilientcomms.meshdemo
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 
 class MeshDemoViewModel(application: Application) : AndroidViewModel(application) {
-    private val session = MeshtasticSession(application, viewModelScope)
-    val uiState = session.state
+    private val demoApplication = application as MeshDemoApplication
+    val uiState = demoApplication.uiState
 
-    fun connect() = session.connect()
-    fun permissionRequired() = session.permissionRequired()
-    fun updateDraft(value: String) = session.updateDraft(value)
-    fun start() = session.start()
-    fun send() = session.send()
-    fun startOver() = session.startOver()
-    fun relayNextBitcoinTransaction() = session.relayNextBitcoinTransaction()
-    fun resetBitcoinQueue() = session.resetBitcoinQueue()
+    fun connect() = RadioConnectionService.connect(demoApplication)
 
-    override fun onCleared() {
-        session.close()
-        super.onCleared()
-    }
+    fun selectRadio(address: String) = withSession { selectRadio(address) }
+    fun changeRadio() = withSession { changeRadio() }
+    fun permissionRequired() = demoApplication.markPermissionRequired()
+    fun updateDraft(value: String) = withSession { updateDraft(value) }
+    fun start() = withSession { start() }
+    fun send() = withSession { send() }
+    fun startOver() = withSession { startOver() }
+    fun relayNextBitcoinTransaction() = withSession { relayNextBitcoinTransaction() }
+    fun resetBitcoinQueue() = withSession { resetBitcoinQueue() }
+
+    private fun withSession(action: MeshtasticSession.() -> Unit) =
+        demoApplication.withRadioSession(action)
 }

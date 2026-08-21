@@ -38,6 +38,39 @@ class MeshDemoModelsTest {
     }
 
     @Test
+    fun meshtasticBluetoothName_acceptsConferenceRadioNames() {
+        assertTrue(isMeshtasticBluetoothName("Meshtastic_e8e8"))
+        assertTrue(isMeshtasticBluetoothName("meshtastic_063c"))
+        assertFalse(isMeshtasticBluetoothName("Headphones"))
+        assertFalse(isMeshtasticBluetoothName(null))
+    }
+
+    @Test
+    fun onePairedRadio_isAutomaticallySelected() {
+        val attached = DiscoveredRadio("AA:BB:CC:DD:EE:01", "LT1", -48, isBonded = true)
+        val unpaired = DiscoveredRadio("AA:BB:CC:DD:EE:02", "LT2", -35, isBonded = false)
+
+        assertEquals(attached, singlePairedRadio(listOf(attached, unpaired)))
+    }
+
+    @Test
+    fun multiplePairedRadios_requireSelectionEvenWhenOneIsStronger() {
+        val attached = DiscoveredRadio("AA:BB:CC:DD:EE:01", "LT1", -42, isBonded = true)
+        val nearby = DiscoveredRadio("AA:BB:CC:DD:EE:02", "LT2", -70, isBonded = true)
+
+        assertEquals(null, singlePairedRadio(listOf(attached, nearby)))
+        assertEquals(listOf(attached, nearby), pairedRadios(listOf(nearby, attached)))
+    }
+
+    @Test
+    fun unpairedRadios_areNeverAutomaticallySelected() {
+        val radio = DiscoveredRadio("AA:BB:CC:DD:EE:01", "LT1", -40, isBonded = false)
+
+        assertEquals(null, singlePairedRadio(listOf(radio)))
+        assertTrue(pairedRadios(listOf(radio)).isEmpty())
+    }
+
+    @Test
     fun sendIsEnabledOnlyForConnectedValidDraft() {
         val connected = MeshDemoState(radioStatus = RadioStatus.CONNECTED, draft = "CODEX TEST")
 

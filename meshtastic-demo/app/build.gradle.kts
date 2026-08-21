@@ -1,18 +1,7 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
-
-val localProperties = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.isFile) file.inputStream().use(::load)
-}
-
-fun stationAddress(gradleKey: String, localKey: String): String =
-    providers.gradleProperty(gradleKey).orNull
-        ?: localProperties.getProperty(localKey, "")
 
 fun quoted(value: String): String =
     "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
@@ -41,11 +30,6 @@ android {
             buildConfigField("String", "STATION_NAME", quoted("MESH-ALPHA"))
             buildConfigField("String", "RADIO_NAME", quoted("LT1"))
             buildConfigField("String", "BITCOIN_QUEUE_ID", quoted("alpha"))
-            buildConfigField(
-                "String",
-                "MESHTASTIC_BLE_ADDRESS",
-                quoted(stationAddress("meshABleAddress", "meshA.bleAddress")),
-            )
         }
         create("meshB") {
             dimension = "station"
@@ -55,11 +39,6 @@ android {
             buildConfigField("String", "STATION_NAME", quoted("MESH-BRAVO"))
             buildConfigField("String", "RADIO_NAME", quoted("LT2"))
             buildConfigField("String", "BITCOIN_QUEUE_ID", quoted("bravo"))
-            buildConfigField(
-                "String",
-                "MESHTASTIC_BLE_ADDRESS",
-                quoted(stationAddress("meshBBleAddress", "meshB.bleAddress")),
-            )
         }
     }
 

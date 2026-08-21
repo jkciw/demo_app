@@ -22,6 +22,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -47,6 +48,7 @@ private val Danger = Color(0xFFFF8C82)
 fun MeshDemoApp(
     viewModel: MeshDemoViewModel,
     onRetryConnection: () -> Unit,
+    onOpenBluetoothSettings: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsState()
     MaterialTheme {
@@ -66,6 +68,9 @@ fun MeshDemoApp(
                         onRetry = onRetryConnection,
                         onRelayBitcoin = viewModel::relayNextBitcoinTransaction,
                         onResetBitcoin = viewModel::resetBitcoinQueue,
+                        onSelectRadio = viewModel::selectRadio,
+                        onChangeRadio = viewModel::changeRadio,
+                        onOpenBluetoothSettings = onOpenBluetoothSettings,
                     )
                     DemoStep.COMPOSE -> ComposeScreen(state, viewModel::updateDraft, viewModel::send)
                     DemoStep.RESULT -> ResultScreen(state, viewModel::startOver)
@@ -94,8 +99,21 @@ private fun HomeScreen(
     onRetry: () -> Unit,
     onRelayBitcoin: () -> Unit,
     onResetBitcoin: () -> Unit,
+    onSelectRadio: (String) -> Unit,
+    onChangeRadio: () -> Unit,
+    onOpenBluetoothSettings: () -> Unit,
 ) {
     StatusCard(state)
+    if (state.radioStatus in RADIO_SETUP_STATES) {
+        Spacer(Modifier.height(20.dp))
+        RadioSetupCard(
+            state = state,
+            onRetry = onRetry,
+            onSelectRadio = onSelectRadio,
+            onOpenBluetoothSettings = onOpenBluetoothSettings,
+        )
+        return
+    }
     Spacer(Modifier.height(20.dp))
     BitcoinRelayCard(state, onRelayBitcoin, onResetBitcoin)
     Spacer(Modifier.height(36.dp))
@@ -107,7 +125,7 @@ private fun HomeScreen(
     )
     Spacer(Modifier.height(10.dp))
     Text(
-        "Your phone talks to ${StationConfig.radioName} over Bluetooth. The radio carries messages across the LoRa mesh.",
+        "Your phone talks to ${state.radioDisplayName} over Bluetooth. The radio carries messages across the LoRa mesh.",
         color = Muted,
         fontSize = 16.sp,
         lineHeight = 24.sp,
@@ -115,11 +133,84 @@ private fun HomeScreen(
     Spacer(Modifier.height(36.dp))
     if (state.isConnected) {
         PrimaryButton("START", onStart, enabled = true)
+        Spacer(Modifier.height(12.dp))
+        SecondaryButton("CHANGE RADIO", onChangeRadio, enabled = !state.isBitcoinRelayActive)
     } else {
-        PrimaryButton("RETRY CONNECTION", onRetry, enabled = state.radioStatus != RadioStatus.NOT_PROVISIONED)
-        if (state.radioStatus == RadioStatus.NOT_PROVISIONED) {
+        PrimaryButton(
+            if (state.radioStatus == RadioStatus.PERMISSION_REQUIRED) {
+                "GRANT BLUETOOTH PERMISSION"
+            } else {
+                "RETRY CONNECTION"
+            },
+            onRetry,
+            enabled = true,
+        )
+        if (state.selectedRadioAddress != null) {
             Spacer(Modifier.height(12.dp))
-            Text("This station build needs its fixed BLE address before installation.", color = Danger)
+            SecondaryButton("CHANGE RADIO", onChangeRadio, enabled = !state.isBitcoinRelayActive)
+        }
+    }
+}
+
+@Composable
+private fun RadioSetupCard(
+    state: MeshDemoState,
+    onRetry: () -> Unit,
+    onSelectRadio: (String) -> Unit,
+    onOpenBluetoothSettings: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Text("ATTACHED RADIO", color = Cyan, fontSize = 12.sp, fontWeight = FontWeight.Black)
+            Spacer(Modifier.height(8.dp))
+            when (state.radioStatus) {
+                RadioStatus.SCANNING -> {
+                    Text("Finding your paired Meshtastic radio…", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Keep the radio powered on and close to this phone.", color = Muted, lineHeight = 21.sp)
+                }
+                RadioStatus.NO_PAIRED_RADIO -> {
+                    Text("No paired radio found", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Pair the attached Meshtastic radio in Android Bluetooth settings, then scan again.",
+                        color = Muted,
+                        lineHeight = 21.sp,
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    PrimaryButton("OPEN BLUETOOTH SETTINGS", onOpenBluetoothSettings, enabled = true)
+                    Spacer(Modifier.height(10.dp))
+                    SecondaryButton("SCAN AGAIN", onRetry, enabled = true)
+                }
+                RadioStatus.SELECTION_REQUIRED -> {
+                    Text("Choose this phone’s radio", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    Text("More than one paired Meshtastic radio is nearby.", color = Muted)
+                    Spacer(Modifier.height(14.dp))
+                    state.discoveredRadios.forEach { radio ->
+                        OutlinedButton(
+                            onClick = { onSelectRadio(radio.address) },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(radio.displayName, fontWeight = FontWeight.Bold)
+                                Text(
+                                    radio.rssi?.let { "Paired · ${signalLabel(it)}" } ?: "Paired in Android",
+                                    color = Muted,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                        }
+                    }
+                    SecondaryButton("SCAN AGAIN", onRetry, enabled = true)
+                }
+                else -> Unit
+            }
         }
     }
 }
@@ -214,7 +305,7 @@ private fun StatusCard(state: MeshDemoState) {
             Spacer(Modifier.width(12.dp))
             Column {
                 Text(state.statusText, color = Color.White, fontWeight = FontWeight.Bold)
-                Text("Radio: ${StationConfig.radioName}  •  Primary channel", color = Muted, fontSize = 13.sp)
+                Text("Radio: ${state.radioDisplayName}  •  Primary channel", color = Muted, fontSize = 13.sp)
             }
         }
     }
@@ -261,7 +352,7 @@ private fun ResultScreen(state: MeshDemoState, onStartOver: () -> Unit) {
     Spacer(Modifier.height(24.dp))
     JourneyNode("THIS PHONE", StationConfig.stationName)
     JourneyArrow("Bluetooth")
-    JourneyNode("LILYGO RADIO", StationConfig.radioName)
+    JourneyNode("MESHTASTIC RADIO", state.radioDisplayName)
     JourneyArrow("LoRa / primary channel")
     JourneyNode("MESHTASTIC MESH", "Nearby configured nodes")
     Spacer(Modifier.height(24.dp))
@@ -329,6 +420,30 @@ private fun PrimaryButton(label: String, onClick: () -> Unit, enabled: Boolean) 
     ) {
         Text(label, fontWeight = FontWeight.Black)
     }
+}
+
+@Composable
+private fun SecondaryButton(label: String, onClick: () -> Unit, enabled: Boolean) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+        modifier = Modifier.fillMaxWidth().height(50.dp),
+    ) {
+        Text(label, fontWeight = FontWeight.Bold)
+    }
+}
+
+private val RADIO_SETUP_STATES = setOf(
+    RadioStatus.SCANNING,
+    RadioStatus.NO_PAIRED_RADIO,
+    RadioStatus.SELECTION_REQUIRED,
+)
+
+private fun signalLabel(rssi: Int): String = when {
+    rssi >= -60 -> "strong signal"
+    rssi >= -75 -> "medium signal"
+    else -> "weak signal"
 }
 
 private fun statusColor(state: MeshDemoState): Color =
