@@ -69,6 +69,7 @@ class MeshtasticSession(
     private val bitcoinReplies = MutableSharedFlow<BitcoinReply>(replay = 32, extraBufferCapacity = 32)
     private var client: RadioClient? = null
     private var bitcoinRelayJob: Job? = null
+    private var connectJob: Job? = null
     private var discoveryJob: Job? = null
     private var recoveryJob: Job? = null
     private var desiredRadioAddress: String? = null
@@ -82,6 +83,12 @@ class MeshtasticSession(
         } else {
             discoverRadios()
         }
+    }
+
+    fun scanAgain() {
+        discoveryJob?.cancel()
+        discoveryJob = null
+        discoverRadios()
     }
 
     fun selectStation(role: StationRole) {
@@ -140,15 +147,15 @@ class MeshtasticSession(
 
     fun changeRadio() {
         scope.launch {
+            Log.i(TAG, "Change radio requested; current=${_state.value.selectedRadioAddress}")
             discoveryJob?.cancel()
             discoveryJob = null
             desiredRadioAddress = null
             desiredRadioName = null
+            connectJob?.cancel()
+            connectJob = null
             recoveryJob?.cancel()
             recoveryJob = null
-            connectionMutex.withLock {
-                disconnectLocked()
-            }
             preferences.edit()
                 .remove(SELECTED_RADIO_ADDRESS_KEY)
                 .remove(SELECTED_RADIO_NAME_KEY)
@@ -156,12 +163,15 @@ class MeshtasticSession(
             _state.update {
                 it.copy(
                     step = DemoStep.HOME,
-                    radioStatus = RadioStatus.DISCONNECTED,
-                    statusText = "Ready to find the attached radio",
+                    radioStatus = RadioStatus.SCANNING,
+                    statusText = "Switching radio…",
                     selectedRadioAddress = null,
                     selectedRadioName = null,
                     discoveredRadios = emptyList(),
                 )
+            }
+            connectionMutex.withLock {
+                disconnectLocked()
             }
             discoverRadios()
         }
@@ -185,6 +195,8 @@ class MeshtasticSession(
                 permissionRequired()
                 return@launch
             }
+            // Keep progress visible long enough to acknowledge the participant's tap.
+            delay(BLE_SCAN_FEEDBACK_MS)
             when {
                 bonded.size == 1 -> {
                     val radio = bonded.single()
@@ -313,19 +325,25 @@ class MeshtasticSession(
     private fun connectRadio(address: String, name: String?) {
         desiredRadioAddress = address
         desiredRadioName = name
+        connectJob?.cancel()
         recoveryJob?.cancel()
         recoveryJob = null
-        scope.launch {
+        connectJob = scope.launch {
             connectOnce(address, name, isRecovery = false)
         }
     }
 
-    private suspend fun connectOnce(address: String, name: String?, isRecovery: Boolean): Boolean =
-        connectionMutex.withLock {
-            if (desiredRadioAddress != address) return@withLock false
-            if (client?.connection?.value is ConnectionState.Connected) return@withLock true
+    private suspend fun connectOnce(address: String, name: String?, isRecovery: Boolean): Boolean {
+        var alreadyConnected = false
+        val radioClient = connectionMutex.withLock {
+            if (desiredRadioAddress != address) return@withLock null
+            if (client?.connection?.value is ConnectionState.Connected) {
+                alreadyConnected = true
+                return@withLock null
+            }
 
             disconnectLocked()
+            if (desiredRadioAddress != address) return@withLock null
             val displayName = name ?: _state.value.radioDisplayName
             _state.update {
                 it.copy(
@@ -338,7 +356,7 @@ class MeshtasticSession(
                 )
             }
 
-            val radioClient = RadioClient.Builder()
+            RadioClient.Builder()
                 .transport(
                     BleTransport(address = address) {
                         autoConnectIf { true }
@@ -348,17 +366,25 @@ class MeshtasticSession(
                 .logger(SDK_LOGGER)
                 .autoReconnect(AutoReconnectConfig())
                 .build()
-            client = radioClient
-            observe(radioClient, address, name)
+                .also {
+                    client = it
+                    observe(it, address, name)
+                }
+        }
+        if (alreadyConnected) return true
+        radioClient ?: return false
 
-            try {
-                radioClient.connect()
-                Log.i(TAG, "Connected station=${_state.value.stationName} radio=$displayName")
-                true
-            } catch (exception: CancellationException) {
-                throw exception
-            } catch (exception: Exception) {
-                Log.e(TAG, "BLE connection failed", exception)
+        val displayName = name ?: _state.value.radioDisplayName
+        return try {
+            radioClient.connect()
+            if (client !== radioClient || desiredRadioAddress != address) return false
+            Log.i(TAG, "Connected station=${_state.value.stationName} radio=$displayName")
+            true
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            Log.e(TAG, "BLE connection failed", exception)
+            if (client === radioClient && desiredRadioAddress == address) {
                 _state.update {
                     it.copy(
                         radioStatus = if (isRecovery) RadioStatus.RECONNECTING else RadioStatus.ERROR,
@@ -369,9 +395,10 @@ class MeshtasticSession(
                         },
                     )
                 }
-                false
             }
+            false
         }
+    }
 
     fun permissionRequired() {
         _state.update {
@@ -601,6 +628,8 @@ class MeshtasticSession(
         discoveryJob = null
         desiredRadioAddress = null
         desiredRadioName = null
+        connectJob?.cancel()
+        connectJob = null
         recoveryJob?.cancel()
         recoveryJob = null
         connectionMutex.withLock { disconnectLocked() }
@@ -711,7 +740,21 @@ class MeshtasticSession(
         nodeNames.clear()
         val oldClient = client
         client = null
-        runCatching { oldClient?.disconnect() }
+        if (oldClient != null) {
+            val completed = withTimeoutOrNull(BLE_DISCONNECT_TIMEOUT_MS) {
+                try {
+                    oldClient.disconnect()
+                } catch (exception: CancellationException) {
+                    throw exception
+                } catch (exception: Exception) {
+                    Log.w(TAG, "BLE disconnect failed; continuing with clean session", exception)
+                }
+                true
+            } ?: false
+            if (!completed) {
+                Log.w(TAG, "BLE disconnect timed out; continuing with clean session")
+            }
+        }
     }
 
     private suspend fun awaitChunkReply(session: String, chunk: Int): BitcoinReply? =
@@ -762,6 +805,8 @@ class MeshtasticSession(
         const val SELECTED_RADIO_ADDRESS_KEY = "selected_radio_address"
         const val SELECTED_RADIO_NAME_KEY = "selected_radio_name"
         const val BLE_SCAN_WINDOW_MS = 5_000L
+        const val BLE_SCAN_FEEDBACK_MS = 650L
+        const val BLE_DISCONNECT_TIMEOUT_MS = 2_000L
         const val BITCOIN_CHUNK_ATTEMPTS = 3
         const val BITCOIN_RADIO_SEND_TIMEOUT_MS = 10_000L
         const val BITCOIN_CHUNK_TIMEOUT_MS = 30_000L

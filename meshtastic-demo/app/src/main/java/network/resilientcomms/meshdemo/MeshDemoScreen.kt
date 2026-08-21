@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,6 +22,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -71,6 +73,7 @@ fun MeshDemoApp(
                         state = state,
                         onStart = viewModel::start,
                         onRetry = onRetryConnection,
+                        onScanAgain = viewModel::scanRadios,
                         onRelayBitcoin = viewModel::relayNextBitcoinTransaction,
                         onResetBitcoin = viewModel::resetBitcoinQueue,
                         onSelectRadio = viewModel::selectRadio,
@@ -141,6 +144,7 @@ private fun HomeScreen(
     state: MeshDemoState,
     onStart: () -> Unit,
     onRetry: () -> Unit,
+    onScanAgain: () -> Unit,
     onRelayBitcoin: () -> Unit,
     onResetBitcoin: () -> Unit,
     onSelectRadio: (String) -> Unit,
@@ -153,7 +157,7 @@ private fun HomeScreen(
         Spacer(Modifier.height(20.dp))
         RadioSetupCard(
             state = state,
-            onRetry = onRetry,
+            onScanAgain = onScanAgain,
             onSelectRadio = onSelectRadio,
             onOpenBluetoothSettings = onOpenBluetoothSettings,
         )
@@ -204,7 +208,7 @@ private fun HomeScreen(
 @Composable
 private fun RadioSetupCard(
     state: MeshDemoState,
-    onRetry: () -> Unit,
+    onScanAgain: () -> Unit,
     onSelectRadio: (String) -> Unit,
     onOpenBluetoothSettings: () -> Unit,
 ) {
@@ -218,7 +222,20 @@ private fun RadioSetupCard(
             Spacer(Modifier.height(8.dp))
             when (state.radioStatus) {
                 RadioStatus.SCANNING -> {
-                    Text("Finding your paired Meshtastic radio…", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(28.dp),
+                            color = Cyan,
+                            strokeWidth = 3.dp,
+                        )
+                        Spacer(Modifier.width(14.dp))
+                        Text(
+                            "Finding your paired Meshtastic radio…",
+                            color = Color.White,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                     Spacer(Modifier.height(8.dp))
                     Text("Keep the radio powered on and close to this phone.", color = Muted, lineHeight = 21.sp)
                 }
@@ -233,7 +250,7 @@ private fun RadioSetupCard(
                     Spacer(Modifier.height(18.dp))
                     PrimaryButton("OPEN BLUETOOTH SETTINGS", onOpenBluetoothSettings, enabled = true)
                     Spacer(Modifier.height(10.dp))
-                    SecondaryButton("SCAN AGAIN", onRetry, enabled = true)
+                    SecondaryButton("SCAN AGAIN", onScanAgain, enabled = true)
                 }
                 RadioStatus.SELECTION_REQUIRED -> {
                     Text("Choose this phone’s radio", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
@@ -256,7 +273,7 @@ private fun RadioSetupCard(
                             }
                         }
                     }
-                    SecondaryButton("SCAN AGAIN", onRetry, enabled = true)
+                    SecondaryButton("SCAN AGAIN", onScanAgain, enabled = true)
                 }
                 else -> Unit
             }

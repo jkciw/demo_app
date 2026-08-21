@@ -26,6 +26,7 @@ class MeshDemoViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun selectRadio(address: String) = withSession { selectRadio(address) }
+    fun scanRadios() = withSession { scanAgain() }
     fun changeRadio() = withSession { changeRadio() }
     fun permissionRequired() = demoApplication.markPermissionRequired()
     fun updateDraft(value: String) = withSession { updateDraft(value) }
