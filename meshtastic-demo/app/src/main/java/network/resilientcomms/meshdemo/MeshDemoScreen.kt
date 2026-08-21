@@ -47,6 +47,7 @@ private val Danger = Color(0xFFFF8C82)
 @Composable
 fun MeshDemoApp(
     viewModel: MeshDemoViewModel,
+    onSelectStation: (StationRole) -> Unit,
     onRetryConnection: () -> Unit,
     onOpenBluetoothSettings: () -> Unit,
 ) {
@@ -59,8 +60,12 @@ fun MeshDemoApp(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 24.dp, vertical = 28.dp),
             ) {
-                Header()
+                Header(state)
                 Spacer(Modifier.height(26.dp))
+                if (state.stationRole == null) {
+                    StationSelectionScreen(onSelectStation)
+                    return@Column
+                }
                 when (state.step) {
                     DemoStep.HOME -> HomeScreen(
                         state = state,
@@ -70,6 +75,7 @@ fun MeshDemoApp(
                         onResetBitcoin = viewModel::resetBitcoinQueue,
                         onSelectRadio = viewModel::selectRadio,
                         onChangeRadio = viewModel::changeRadio,
+                        onChangeStation = viewModel::changeStation,
                         onOpenBluetoothSettings = onOpenBluetoothSettings,
                     )
                     DemoStep.COMPOSE -> ComposeScreen(state, viewModel::updateDraft, viewModel::send)
@@ -85,11 +91,49 @@ fun MeshDemoApp(
 }
 
 @Composable
-private fun Header() {
+private fun Header(state: MeshDemoState) {
     Text("RESILIENT COMMS LAB", color = Cyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
     Text("MESHTASTIC", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Black)
-    Text(StationConfig.stationName, color = Muted, fontSize = 15.sp)
+    Text(state.stationName, color = Muted, fontSize = 15.sp)
+}
+
+@Composable
+private fun StationSelectionScreen(onSelectStation: (StationRole) -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Text("THIS PHONE", color = Cyan, fontSize = 12.sp, fontWeight = FontWeight.Black)
+            Spacer(Modifier.height(8.dp))
+            Text("Choose a station", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "The choice sets this phone's identity and its independent signed-transaction queue.",
+                color = Muted,
+                lineHeight = 21.sp,
+            )
+            Spacer(Modifier.height(20.dp))
+            StationRole.entries.forEach { role ->
+                OutlinedButton(
+                    onClick = { onSelectStation(role) },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+                        Text(role.stationName, fontWeight = FontWeight.Black)
+                        Text(
+                            "${role.storageId.replaceFirstChar(Char::uppercase)} transaction queue",
+                            color = Muted,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -101,6 +145,7 @@ private fun HomeScreen(
     onResetBitcoin: () -> Unit,
     onSelectRadio: (String) -> Unit,
     onChangeRadio: () -> Unit,
+    onChangeStation: () -> Unit,
     onOpenBluetoothSettings: () -> Unit,
 ) {
     StatusCard(state)
@@ -135,6 +180,8 @@ private fun HomeScreen(
         PrimaryButton("START", onStart, enabled = true)
         Spacer(Modifier.height(12.dp))
         SecondaryButton("CHANGE RADIO", onChangeRadio, enabled = !state.isBitcoinRelayActive)
+        Spacer(Modifier.height(12.dp))
+        SecondaryButton("CHANGE STATION", onChangeStation, enabled = !state.isBitcoinRelayActive)
     } else {
         PrimaryButton(
             if (state.radioStatus == RadioStatus.PERMISSION_REQUIRED) {
@@ -149,6 +196,8 @@ private fun HomeScreen(
             Spacer(Modifier.height(12.dp))
             SecondaryButton("CHANGE RADIO", onChangeRadio, enabled = !state.isBitcoinRelayActive)
         }
+        Spacer(Modifier.height(12.dp))
+        SecondaryButton("CHANGE STATION", onChangeStation, enabled = !state.isBitcoinRelayActive)
     }
 }
 
@@ -350,7 +399,7 @@ private fun ComposeScreen(
 private fun ResultScreen(state: MeshDemoState, onStartOver: () -> Unit) {
     Text("Message journey", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(24.dp))
-    JourneyNode("THIS PHONE", StationConfig.stationName)
+    JourneyNode("THIS PHONE", state.stationName)
     JourneyArrow("Bluetooth")
     JourneyNode("MESHTASTIC RADIO", state.radioDisplayName)
     JourneyArrow("LoRa / primary channel")

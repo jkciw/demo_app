@@ -92,7 +92,7 @@ class RadioConnectionService : Service() {
         )
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("${StationConfig.stationName} radio link")
+            .setContentTitle("${demoApplication.selectedStationRole?.stationName ?: "Meshtastic"} radio link")
             .setContentText(status)
             .setContentIntent(openApp)
             .setOngoing(true)

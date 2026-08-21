@@ -72,7 +72,11 @@ class MeshDemoModelsTest {
 
     @Test
     fun sendIsEnabledOnlyForConnectedValidDraft() {
-        val connected = MeshDemoState(radioStatus = RadioStatus.CONNECTED, draft = "CODEX TEST")
+        val connected = MeshDemoState(
+            stationRole = StationRole.ALPHA,
+            radioStatus = RadioStatus.CONNECTED,
+            draft = "CODEX TEST",
+        )
 
         assertTrue(connected.canSend)
         assertFalse(connected.copy(radioStatus = RadioStatus.DISCONNECTED).canSend)
@@ -119,6 +123,7 @@ class MeshDemoModelsTest {
     @Test
     fun bitcoinRelayOnlyEnablesForConnectedStationWithRemainingTransaction() {
         val ready = MeshDemoState(
+            stationRole = StationRole.BRAVO,
             radioStatus = RadioStatus.CONNECTED,
             bitcoinQueueTotal = 2,
             bitcoinQueueIndex = 0,
@@ -128,5 +133,28 @@ class MeshDemoModelsTest {
         assertFalse(ready.copy(radioStatus = RadioStatus.DISCONNECTED).canRelayBitcoin)
         assertFalse(ready.copy(bitcoinQueueIndex = 2).canRelayBitcoin)
         assertFalse(ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.SENDING).canRelayBitcoin)
+    }
+
+    @Test
+    fun stationRoles_haveIndependentNamesAssetsAndQueueProgress() {
+        assertEquals(StationRole.ALPHA, StationRole.fromStorageId("alpha"))
+        assertEquals(StationRole.BRAVO, StationRole.fromStorageId("bravo"))
+        assertEquals(null, StationRole.fromStorageId("unknown"))
+        assertFalse(StationRole.ALPHA.transactionAssetName == StationRole.BRAVO.transactionAssetName)
+        assertEquals("next_transaction_alpha", nextTransactionPreferenceKey(StationRole.ALPHA))
+        assertEquals("next_transaction_bravo", nextTransactionPreferenceKey(StationRole.BRAVO))
+    }
+
+    @Test
+    fun stationSelection_isRequiredBeforeSendingOrRelaying() {
+        val unconfigured = MeshDemoState(
+            stationRole = null,
+            radioStatus = RadioStatus.CONNECTED,
+            draft = "HELLO",
+            bitcoinQueueTotal = 2,
+        )
+
+        assertFalse(unconfigured.canSend)
+        assertFalse(unconfigured.canRelayBitcoin)
     }
 }

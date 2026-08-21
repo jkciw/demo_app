@@ -3,9 +3,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-fun quoted(value: String): String =
-    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
-
 android {
     namespace = "network.resilientcomms.meshdemo"
     compileSdk = 37
@@ -16,30 +13,9 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        resValue("string", "app_name", "Meshtastic Conference Demo")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    flavorDimensions += "station"
-    productFlavors {
-        create("meshA") {
-            dimension = "station"
-            applicationIdSuffix = ".a"
-            versionNameSuffix = "-mesh-a"
-            resValue("string", "app_name", "Mesh Demo — Alpha")
-            buildConfigField("String", "STATION_NAME", quoted("MESH-ALPHA"))
-            buildConfigField("String", "RADIO_NAME", quoted("LT1"))
-            buildConfigField("String", "BITCOIN_QUEUE_ID", quoted("alpha"))
-        }
-        create("meshB") {
-            dimension = "station"
-            applicationIdSuffix = ".b"
-            versionNameSuffix = "-mesh-b"
-            resValue("string", "app_name", "Mesh Demo — Bravo")
-            buildConfigField("String", "STATION_NAME", quoted("MESH-BRAVO"))
-            buildConfigField("String", "RADIO_NAME", quoted("LT2"))
-            buildConfigField("String", "BITCOIN_QUEUE_ID", quoted("bravo"))
-        }
     }
 
     buildTypes {

@@ -3,8 +3,27 @@
  */
 package network.resilientcomms.meshdemo
 
-data object StationConfig {
-    val stationName: String = BuildConfig.STATION_NAME
-    val radioName: String = BuildConfig.RADIO_NAME
-    val bitcoinQueueId: String = BuildConfig.BITCOIN_QUEUE_ID
+enum class StationRole(
+    val storageId: String,
+    val stationName: String,
+    val radioFallbackName: String,
+    val transactionAssetName: String,
+) {
+    ALPHA(
+        storageId = "alpha",
+        stationName = "MESH-ALPHA",
+        radioFallbackName = "Alpha radio",
+        transactionAssetName = "regtest_transactions_alpha.txt",
+    ),
+    BRAVO(
+        storageId = "bravo",
+        stationName = "MESH-BRAVO",
+        radioFallbackName = "Bravo radio",
+        transactionAssetName = "regtest_transactions_bravo.txt",
+    ),
+    ;
+
+    companion object {
+        fun fromStorageId(value: String?): StationRole? = entries.firstOrNull { it.storageId == value }
+    }
 }

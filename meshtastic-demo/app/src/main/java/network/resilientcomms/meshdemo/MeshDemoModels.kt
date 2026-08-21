@@ -85,6 +85,7 @@ data class ReceivedText(
 )
 
 data class MeshDemoState(
+    val stationRole: StationRole? = null,
     val step: DemoStep = DemoStep.HOME,
     val radioStatus: RadioStatus = RadioStatus.DISCONNECTED,
     val statusText: String = "Radio disconnected",
@@ -106,11 +107,13 @@ data class MeshDemoState(
     val bitcoinTxid: String? = null,
     val bitcoinBlockHeight: Int? = null,
 ) {
+    val stationName: String get() = stationRole?.stationName ?: "SELECT STATION"
     val isConnected: Boolean get() = radioStatus == RadioStatus.CONNECTED
-    val radioDisplayName: String get() = selectedRadioName ?: StationConfig.radioName
+    val radioDisplayName: String
+        get() = selectedRadioName ?: stationRole?.radioFallbackName ?: "Attached radio"
     val draftBytes: Int get() = draft.encodeToByteArray().size
     val canSend: Boolean
-        get() = isConnected && draft.isNotBlank() && draftBytes <= MAX_TEXT_BYTES &&
+        get() = stationRole != null && isConnected && draft.isNotBlank() && draftBytes <= MAX_TEXT_BYTES &&
             sendProgress !in setOf(SendProgress.QUEUED, SendProgress.SENT_TO_RADIO)
     val bitcoinRemaining: Int get() = (bitcoinQueueTotal - bitcoinQueueIndex).coerceAtLeast(0)
     val isBitcoinRelayActive: Boolean
@@ -120,8 +123,11 @@ data class MeshDemoState(
             BitcoinRelayProgress.BROADCAST,
         )
     val canRelayBitcoin: Boolean
-        get() = isConnected && bitcoinRemaining > 0 && !isBitcoinRelayActive
+        get() = stationRole != null && isConnected && bitcoinRemaining > 0 && !isBitcoinRelayActive
 }
+
+internal fun nextTransactionPreferenceKey(role: StationRole): String =
+    "next_transaction_${role.storageId}"
 
 internal fun pairedRadios(radios: Collection<DiscoveredRadio>): List<DiscoveredRadio> =
     radios

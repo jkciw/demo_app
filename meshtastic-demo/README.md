@@ -5,13 +5,17 @@ the official Meshtastic SDK `0.1.0` over BLE, broadcasts text on primary channel
 inbound text packets, and labels a broadcast delivery signal as **relayed by mesh** rather than
 claiming that a named phone received it.
 
-## Pair the attached radios
+## Build and configure a station
 
-Build the two station APKs without device-specific values:
+Build the one universal APK:
 
 ```shell
-./gradlew :app:assembleMeshADebug :app:assembleMeshBDebug
+./gradlew :app:assembleDebug
 ```
+
+Install the same APK on every conference phone. On first launch choose **MESH-ALPHA** or
+**MESH-BRAVO**. The choice controls the visible station identity and selects an independent
+signed-transaction queue; it is saved locally and can be replaced with **Change station**.
 
 Before the conference, pair each phone with its physically attached Meshtastic radio in Android
 Bluetooth settings and remove any stale Meshtastic pairings. On first launch the app checks the
@@ -31,8 +35,9 @@ radio.
 
 ## Hardware proof
 
-Install `meshA` on M1 (paired to LT1) and `meshB` on M2 (paired to LT2). Confirm that each app
-shows its attached radio's name. With Wi-Fi and cellular
+Install the universal APK on M1 and M2. Select Alpha on M1 and Bravo on M2, then pair each phone
+with its attached radio. Confirm that each app shows the selected station and actual radio name.
+With Wi-Fi and cellular
 disabled, verify M1 → LT1 → LoRa → LT2 → M2, then repeat in reverse. The app cannot complete this
 test without the two phones and radios.
 
@@ -41,9 +46,10 @@ distributed under GPL-3.0-or-later terms.
 
 ## Bitcoin Regtest relay
 
-The Alpha and Bravo flavors package independent signed Regtest transaction queues under their
-flavor-specific `assets/regtest_transactions.txt` files. The current Stage 3 development build
-contains two transactions per phone. Each line is one complete signed raw transaction hex.
+The universal APK packages independent Alpha and Bravo Regtest transaction queues under
+`assets/regtest_transactions_alpha.txt` and `assets/regtest_transactions_bravo.txt`. The selected
+runtime station role chooses the queue. The current Stage 3 development build contains two
+transactions per station. Each line is one complete signed raw transaction hex.
 
 On the home screen, **RELAY NEXT SIGNED TRANSACTION** broadcasts the current transaction on the
 proven primary-channel path. Laptop Meshtastic node `!2303a141` consumes the protocol frames and
@@ -66,4 +72,4 @@ cd /Users/balajic/Documents/HongKong/demo_app/laptop-dashboard
 ```
 
 After replacing the development queues with the final 250 Alpha and 250 Bravo transactions,
-rebuild the two APKs with the same Gradle command shown above.
+rebuild the universal APK with the same Gradle command shown above.

@@ -364,7 +364,7 @@ Provision RET-A and RET-B identities once, back them up securely, and hide ident
 
 1. Create a minimal single-activity Compose app with `minSdk 26`.
 2. Add released/pinned `sdk-core`, `sdk-transport-ble`, and `sdk-storage-sqldelight` artifacts.
-3. Add station build flavors `meshA` and `meshB` containing labels and provisioned radio identifiers; keep secrets out of source (Meshtastic addresses are identifiers, not secrets).
+3. Package one universal APK. Select Alpha or Bravo at runtime, keep their transaction queues independent, and discover the paired radio without provisioned BLE identifiers.
 4. Implement `MeshtasticSession` owning one `BleTransport`, one `RadioClient`, and its coroutine scope.
 5. Show `connection`, send `CODEX TEST` using broadcast/channel 0, collect `packets`, and display sender/text.
 6. Test M1 -> LT1 -> LT2 -> M2 and confirm B1 also sees the channel message with Wi-Fi/cellular off.
@@ -402,8 +402,9 @@ meshtastic-demo/app/src/main/AndroidManifest.xml
 meshtastic-demo/app/src/main/.../MeshtasticSession.kt
 meshtastic-demo/app/src/main/.../MeshDemoViewModel.kt
 meshtastic-demo/app/src/main/.../MeshProofScreen.kt
-meshtastic-demo/app/src/meshA/.../StationConfig.kt
-meshtastic-demo/app/src/meshB/.../StationConfig.kt
+meshtastic-demo/app/src/main/.../StationConfig.kt       # runtime Alpha/Bravo roles
+meshtastic-demo/app/src/main/assets/regtest_transactions_alpha.txt
+meshtastic-demo/app/src/main/assets/regtest_transactions_bravo.txt
 ```
 
 Columba fork, in order:
@@ -419,4 +420,3 @@ reticulum-demo/app/src/main/.../navigation/...       # add route only; preserve 
 ```
 
 Do not modify `rns-backend-py`, `rns-ipc`, `rns-host`, the RNode bridge, or identity persistence for the first Reticulum proof. If hardware testing exposes a fault there, isolate and document that change separately.
-

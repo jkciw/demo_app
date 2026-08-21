@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MeshDemoApp(
                 viewModel = viewModel,
+                onSelectStation = ::selectStation,
                 onRetryConnection = ::ensurePermissionsAndConnect,
                 onOpenBluetoothSettings = ::openBluetoothSettings,
             )
@@ -38,10 +39,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (!initialConnectAttempted) {
+        if (!initialConnectAttempted && viewModel.hasSelectedStation) {
             initialConnectAttempted = true
             ensurePermissionsAndConnect()
         }
+    }
+
+    private fun selectStation(role: StationRole) {
+        viewModel.selectStation(role)
+        ensurePermissionsAndConnect()
     }
 
     private fun ensurePermissionsAndConnect() {

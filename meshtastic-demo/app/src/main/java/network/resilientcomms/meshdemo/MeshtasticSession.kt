@@ -49,14 +49,17 @@ class MeshtasticSession(
     private val scope: CoroutineScope,
 ) {
     private val preferences = application.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
-    private val signedTransactions = loadSignedTransactions()
-    private val initialQueueIndex = preferences
-        .getInt(NEXT_TRANSACTION_KEY, 0)
-        .coerceIn(0, signedTransactions.size)
+    private val signedTransactionsByRole = StationRole.entries.associateWith(::loadSignedTransactions)
+    private val initialRole = (application as MeshDemoApplication).selectedStationRole
+    private val initialTransactions = initialRole?.let(signedTransactionsByRole::get).orEmpty()
+    private val initialQueueIndex = initialRole
+        ?.let { role -> preferences.getInt(nextTransactionPreferenceKey(role), 0) }
+        ?.coerceIn(0, initialTransactions.size)
+        ?: 0
     private val savedRadioAddress = preferences.getString(SELECTED_RADIO_ADDRESS_KEY, null)
     private val savedRadioName = preferences.getString(SELECTED_RADIO_NAME_KEY, null)
     private val _state = MutableStateFlow(
-        initialState(signedTransactions.size, initialQueueIndex, savedRadioAddress, savedRadioName),
+        initialState(initialRole, initialTransactions.size, initialQueueIndex, savedRadioAddress, savedRadioName),
     )
     val state: StateFlow<MeshDemoState> = _state.asStateFlow()
 
@@ -72,11 +75,58 @@ class MeshtasticSession(
     private var desiredRadioName: String? = null
 
     fun connect() {
+        if (_state.value.stationRole == null) return
         val selectedAddress = _state.value.selectedRadioAddress
         if (selectedAddress != null && isBluetoothAddress(selectedAddress)) {
             connectRadio(selectedAddress, _state.value.selectedRadioName)
         } else {
             discoverRadios()
+        }
+    }
+
+    fun selectStation(role: StationRole) {
+        if (_state.value.isBitcoinRelayActive) return
+        val transactions = signedTransactionsByRole[role].orEmpty()
+        val queueIndex = preferences
+            .getInt(nextTransactionPreferenceKey(role), 0)
+            .coerceIn(0, transactions.size)
+        _state.update {
+            it.copy(
+                stationRole = role,
+                step = DemoStep.HOME,
+                bitcoinQueueIndex = queueIndex,
+                bitcoinQueueTotal = transactions.size,
+                bitcoinRelayProgress = BitcoinRelayProgress.IDLE,
+                bitcoinStatusText = if (transactions.isEmpty()) {
+                    "No signed transactions packaged"
+                } else {
+                    "Signed transaction ready"
+                },
+                bitcoinSession = null,
+                bitcoinCurrentChunk = 0,
+                bitcoinTotalChunks = 0,
+                bitcoinTxid = null,
+                bitcoinBlockHeight = null,
+            )
+        }
+    }
+
+    fun clearStation() {
+        if (_state.value.isBitcoinRelayActive) return
+        _state.update {
+            it.copy(
+                stationRole = null,
+                step = DemoStep.HOME,
+                bitcoinQueueIndex = 0,
+                bitcoinQueueTotal = 0,
+                bitcoinRelayProgress = BitcoinRelayProgress.IDLE,
+                bitcoinStatusText = "Select a station queue",
+                bitcoinSession = null,
+                bitcoinCurrentChunk = 0,
+                bitcoinTotalChunks = 0,
+                bitcoinTxid = null,
+                bitcoinBlockHeight = null,
+            )
         }
     }
 
@@ -276,7 +326,7 @@ class MeshtasticSession(
             if (client?.connection?.value is ConnectionState.Connected) return@withLock true
 
             disconnectLocked()
-            val displayName = name ?: StationConfig.radioName
+            val displayName = name ?: _state.value.radioDisplayName
             _state.update {
                 it.copy(
                     radioStatus = if (isRecovery) RadioStatus.RECONNECTING else RadioStatus.CONNECTING,
@@ -303,7 +353,7 @@ class MeshtasticSession(
 
             try {
                 radioClient.connect()
-                Log.i(TAG, "Connected station=${StationConfig.stationName} radio=$displayName")
+                Log.i(TAG, "Connected station=${_state.value.stationName} radio=$displayName")
                 true
             } catch (exception: CancellationException) {
                 throw exception
@@ -385,6 +435,8 @@ class MeshtasticSession(
     fun relayNextBitcoinTransaction() {
         if (bitcoinRelayJob?.isActive == true || !_state.value.canRelayBitcoin) return
         val radioClient = client ?: return
+        val role = _state.value.stationRole ?: return
+        val signedTransactions = signedTransactionsByRole[role].orEmpty()
         val queueIndex = _state.value.bitcoinQueueIndex
         val rawHex = signedTransactions.getOrNull(queueIndex) ?: return
 
@@ -483,7 +535,7 @@ class MeshtasticSession(
                     ?: throw BitcoinRelayException("Laptop did not return a block confirmation")
 
                 val nextIndex = queueIndex + 1
-                preferences.edit().putInt(NEXT_TRANSACTION_KEY, nextIndex).apply()
+                preferences.edit().putInt(nextTransactionPreferenceKey(role), nextIndex).apply()
                 _state.update {
                     it.copy(
                         bitcoinQueueIndex = nextIndex,
@@ -515,7 +567,8 @@ class MeshtasticSession(
 
     fun resetBitcoinQueue() {
         if (_state.value.isBitcoinRelayActive) return
-        preferences.edit().putInt(NEXT_TRANSACTION_KEY, 0).apply()
+        val role = _state.value.stationRole ?: return
+        preferences.edit().putInt(nextTransactionPreferenceKey(role), 0).apply()
         _state.update {
             it.copy(
                 bitcoinQueueIndex = 0,
@@ -681,9 +734,9 @@ class MeshtasticSession(
         return reply as T
     }
 
-    private fun loadSignedTransactions(): List<String> =
+    private fun loadSignedTransactions(role: StationRole): List<String> =
         runCatching {
-            application.assets.open(BITCOIN_ASSET_NAME).bufferedReader().useLines { lines ->
+            application.assets.open(role.transactionAssetName).bufferedReader().useLines { lines ->
                 lines
                     .map(String::trim)
                     .filter { it.isNotEmpty() && !it.startsWith('#') }
@@ -693,22 +746,21 @@ class MeshtasticSession(
                     }
                     .toList()
             }
-        }.onFailure { Log.e(TAG, "Could not load signed Regtest transactions", it) }
+        }.onFailure { Log.e(TAG, "Could not load ${role.storageId} Regtest transactions", it) }
             .getOrDefault(emptyList())
 
     private fun newBitcoinSession(queueIndex: Int): String {
         val timestamp = System.currentTimeMillis().toString(36)
-        return "${StationConfig.bitcoinQueueId.take(1)}${queueIndex.toString(36)}$timestamp".take(24)
+        val queueId = _state.value.stationRole?.storageId ?: "station"
+        return "${queueId.take(1)}${queueIndex.toString(36)}$timestamp".take(24)
     }
 
     private companion object {
         const val TAG = "MeshtasticDemo"
         const val MAX_MESSAGES = 20
         const val PREFERENCES_NAME = "bitcoin_regtest_queue"
-        const val NEXT_TRANSACTION_KEY = "next_transaction"
         const val SELECTED_RADIO_ADDRESS_KEY = "selected_radio_address"
         const val SELECTED_RADIO_NAME_KEY = "selected_radio_name"
-        const val BITCOIN_ASSET_NAME = "regtest_transactions.txt"
         const val BLE_SCAN_WINDOW_MS = 5_000L
         const val BITCOIN_CHUNK_ATTEMPTS = 3
         const val BITCOIN_RADIO_SEND_TIMEOUT_MS = 10_000L
@@ -734,14 +786,18 @@ class MeshtasticSession(
         )
 
         fun initialState(
+            stationRole: StationRole?,
             queueTotal: Int,
             queueIndex: Int,
             savedAddress: String?,
             savedName: String?,
         ): MeshDemoState = MeshDemoState(
+            stationRole = stationRole,
             radioStatus = RadioStatus.DISCONNECTED,
             statusText = if (savedAddress != null && isBluetoothAddress(savedAddress)) {
-                "Ready to connect to ${savedName ?: StationConfig.radioName}"
+                "Ready to connect to ${savedName ?: stationRole?.radioFallbackName ?: "attached radio"}"
+            } else if (stationRole == null) {
+                "Choose this phone's station"
             } else {
                 "Ready to find the attached radio"
             },
