@@ -3,6 +3,7 @@
 
 # Built application artifacts
 *.apk
+meshtastic-conference-*.zip
 
 # Local captures and runtime logs
 /logs/
@@ -10,4 +11,3 @@
 # Editor-local files
 .idea/
 *.iml
-

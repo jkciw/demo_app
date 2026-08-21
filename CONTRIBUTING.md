@@ -72,5 +72,7 @@ base64 -i "$HOME/.android/debug.keystore" | pbcopy
 
 In `github.com/jkciw/demo_app`, open **Settings → Secrets and variables → Actions**, create the
 repository secret `ANDROID_DEBUG_KEYSTORE_BASE64`, and paste the clipboard value. Treat that secret
-as a conference-demo signing credential. If the local debug keystore changes, remote APKs will no
+as a conference-demo signing credential. The workflow verifies its public certificate fingerprint
+and the finished APK's certificate against the identity already installed on the conference phones.
+It refuses to publish a mismatched APK. If the local debug keystore changes, remote APKs will no
 longer update installations signed with the previous key.

@@ -31,6 +31,7 @@ jobs:
         working-directory: meshtastic-demo
     env:
       DEMO_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+      EXPECTED_DEBUG_CERT_SHA256: 02deb30ff9f54751942495aad93d7d2f60b3c9330a58df2c3051e789f89bac2c
 
     steps:
       - name: Check out repository
@@ -59,8 +60,40 @@ jobs:
           printf '%s' "${DEMO_DEBUG_KEYSTORE_BASE64}" | base64 --decode > "${HOME}/.android/debug.keystore"
           chmod 600 "${HOME}/.android/debug.keystore"
 
+      - name: Verify conference signing identity
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          actual_fingerprint="$(
+            keytool -J-Duser.language=en -list -v \
+              -keystore "${HOME}/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              | awk -F': ' '/SHA256:/{gsub(":", "", $2); print tolower($2); exit}'
+          )"
+          if [[ "${actual_fingerprint}" != "${EXPECTED_DEBUG_CERT_SHA256}" ]]; then
+            echo "::error::Signing certificate ${actual_fingerprint} does not match the conference identity"
+            exit 1
+          fi
+          echo "Conference signing certificate verified: ${actual_fingerprint}"
+
       - name: Test, lint, and build universal APK
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+
+      - name: Verify built APK signing identity
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          apksigner_path="$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner -print | sort -V | tail -1)"
+          actual_fingerprint="$(
+            "${apksigner_path}" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
+              | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print tolower($2); exit}'
+          )"
+          if [[ "${actual_fingerprint}" != "${EXPECTED_DEBUG_CERT_SHA256}" ]]; then
+            echo "::error::Built APK certificate ${actual_fingerprint} does not match the conference identity"
+            exit 1
+          fi
+          echo "Built APK signing certificate verified: ${actual_fingerprint}"
 
       - name: Prepare downloadable artifact
         if: github.event_name != 'pull_request'
@@ -80,4 +113,5 @@ jobs:
             meshtastic-demo/build/conference-artifact/*.apk
             meshtastic-demo/build/conference-artifact/*.sha256
           if-no-files-found: error
+          overwrite: true
           retention-days: 30
