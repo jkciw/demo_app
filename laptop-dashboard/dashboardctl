@@ -1,0 +1,250 @@
+#!/bin/zsh
+set -u
+
+dashboard_dir="${0:A:h}"
+runtime_dir="$dashboard_dir/.runtime"
+logs_dir="$dashboard_dir/logs"
+config_file="$dashboard_dir/.dashboard.env"
+collector_pid_file="$runtime_dir/collector.pid"
+frontend_pid_file="$runtime_dir/frontend.pid"
+regtest_controller="$dashboard_dir/regtest/regtestctl"
+
+mkdir -p "$runtime_dir" "$logs_dir"
+
+if [[ -f "$config_file" ]]; then
+  set -a
+  source "$config_file"
+  set +a
+fi
+
+is_running() {
+  local pid_file="$1"
+  [[ -f "$pid_file" ]] || return 1
+  local pid="$(<"$pid_file")"
+  [[ "$pid" == <-> ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+listener_pid() {
+  local port="$1"
+  lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n 1
+}
+
+adopt_listener() {
+  local port="$1"
+  local pid_file="$2"
+  local pid="$(listener_pid "$port")"
+  if [[ "$pid" == <-> ]]; then
+    print -r -- "$pid" > "$pid_file"
+    return 0
+  fi
+  return 1
+}
+
+command_is_owned() {
+  local pid="$1"
+  local process_kind="$2"
+  local command_line="$(ps -p "$pid" -o command= 2>/dev/null)"
+  if [[ "$process_kind" == "frontend" && ( "$command_line" == *"$dashboard_dir/node_modules/.bin/vinext start"* || "$command_line" == *"npm run start"* || "$command_line" == *"$dashboard_dir/node_modules/.bin/vinext dev"* || "$command_line" == *"npm run dev"* ) ]]; then
+    return 0
+  fi
+  if [[ "$process_kind" == "collector" && "$command_line" == *"service/monitor.py"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+adopt_if_owned() {
+  local port="$1"
+  local pid_file="$2"
+  local process_kind="$3"
+  local pid="$(listener_pid "$port")"
+  if [[ "$pid" == <-> ]] && command_is_owned "$pid" "$process_kind"; then
+    print -r -- "$pid" > "$pid_file"
+    return 0
+  fi
+  return 1
+}
+
+detect_meshtastic_port() {
+  if [[ -n "${MESHTASTIC_PORT:-}" && -e "${MESHTASTIC_PORT}" ]]; then
+    print -r -- "$MESHTASTIC_PORT"
+    return 0
+  fi
+
+  local candidates=(/dev/cu.usbmodem*(N))
+  if (( ${#candidates} == 1 )); then
+    print -r -- "$candidates[1]"
+    return 0
+  fi
+
+  print -u2 -- "Could not identify the Meshtastic USB device."
+  print -u2 -- "Connect one radio, or set MESHTASTIC_PORT in .dashboard.env."
+  return 1
+}
+
+wait_for_url() {
+  local url="$1"
+  local attempts="${2:-60}"
+  local count=0
+  while (( count < attempts )); do
+    if curl -fsS --max-time 1 "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+    (( count += 1 ))
+  done
+  return 1
+}
+
+collect_descendants() {
+  local parent="$1"
+  local child
+  for child in $(pgrep -P "$parent" 2>/dev/null); do
+    collect_descendants "$child"
+    print -r -- "$child"
+  done
+}
+
+stop_owned_process() {
+  local pid_file="$1"
+  local process_kind="$2"
+  [[ -f "$pid_file" ]] || return 0
+
+  local pid="$(<"$pid_file")"
+  if [[ "$pid" != <-> ]] || ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pid_file"
+    return 0
+  fi
+
+  if ! command_is_owned "$pid" "$process_kind"; then
+    print -u2 -- "Ignoring stale PID $pid; it does not belong to the dashboard."
+    rm -f "$pid_file"
+    return 0
+  fi
+
+  local descendants=("${(@f)$(collect_descendants "$pid")}")
+  (( ${#descendants} > 0 )) && kill -TERM "${descendants[@]}" 2>/dev/null || true
+  kill -TERM "$pid" 2>/dev/null || true
+
+  local count=0
+  while kill -0 "$pid" 2>/dev/null && (( count < 30 )); do
+    sleep 0.1
+    (( count += 1 ))
+  done
+  if kill -0 "$pid" 2>/dev/null && command_is_owned "$pid" "$process_kind"; then
+    print -- "Forcing the unresponsive $process_kind process to stop..."
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pid_file"
+}
+
+show_status() {
+  local frontend_state="stopped"
+  local collector_state="stopped"
+  curl -fsS --max-time 2 http://localhost:3000/ >/dev/null 2>&1 && frontend_state="running"
+  curl -fsS --max-time 2 http://127.0.0.1:8765/health >/dev/null 2>&1 && collector_state="running"
+  print -- "Dashboard: $frontend_state"
+  print -- "Radio collector: $collector_state"
+}
+
+start_dashboard() {
+  cd "$dashboard_dir" || return 1
+
+  if ! command -v uv >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    print -u2 -- "The dashboard runtime is missing. Install uv and Node.js first."
+    return 1
+  fi
+
+  if [[ ! -f "$dashboard_dir/dist/server/index.js" || \
+        "$dashboard_dir/app/page.tsx" -nt "$dashboard_dir/dist/server/index.js" || \
+        "$dashboard_dir/app/globals.css" -nt "$dashboard_dir/dist/server/index.js" || \
+        "$dashboard_dir/package.json" -nt "$dashboard_dir/dist/server/index.js" ]]; then
+    print -- "Building the dashboard..."
+    if ! npm run build >>"$logs_dir/dashboard.log" 2>&1; then
+      print -u2 -- "The dashboard build failed. See logs/dashboard.log."
+      return 1
+    fi
+  fi
+
+  if ! "$regtest_controller" start >>"$logs_dir/collector.log" 2>&1; then
+    print -u2 -- "Bitcoin Regtest did not start. See logs/collector.log."
+    return 1
+  fi
+
+  local meshtastic_port
+  meshtastic_port="$(detect_meshtastic_port)" || return 1
+
+  adopt_if_owned 8765 "$collector_pid_file" collector || true
+  if is_running "$collector_pid_file" && ! curl -fsS --max-time 2 http://127.0.0.1:8765/health >/dev/null 2>&1; then
+    print -- "Restarting an unresponsive radio collector..."
+    stop_owned_process "$collector_pid_file" collector
+  fi
+  if curl -fsS --max-time 2 http://127.0.0.1:8765/health >/dev/null 2>&1; then
+    adopt_if_owned 8765 "$collector_pid_file" collector || true
+  elif ! is_running "$collector_pid_file"; then
+    local collector_args=(--meshtastic-port "$meshtastic_port")
+    if [[ -n "${RETICULUM_PORT:-}" ]]; then
+      collector_args+=(
+        --reticulum-port "$RETICULUM_PORT"
+        --reticulum-frequency "${RETICULUM_FREQUENCY:-925875000}"
+        --reticulum-bandwidth "${RETICULUM_BANDWIDTH:-250000}"
+        --reticulum-txpower "${RETICULUM_TXPOWER:-17}"
+        --reticulum-sf "${RETICULUM_SF:-9}"
+        --reticulum-cr "${RETICULUM_CR:-5}"
+      )
+    fi
+    : > "$logs_dir/collector.log"
+    nohup uv run python service/monitor.py "${collector_args[@]}" >>"$logs_dir/collector.log" 2>&1 </dev/null &
+    print -r -- "$!" > "$collector_pid_file"
+  fi
+
+  adopt_if_owned 3000 "$frontend_pid_file" frontend || true
+  if curl -fsS --max-time 2 http://localhost:3000/ >/dev/null 2>&1; then
+    adopt_if_owned 3000 "$frontend_pid_file" frontend || true
+  elif ! is_running "$frontend_pid_file"; then
+    : > "$logs_dir/dashboard.log"
+    nohup npm run start >>"$logs_dir/dashboard.log" 2>&1 </dev/null &
+    print -r -- "$!" > "$frontend_pid_file"
+  fi
+
+  if ! wait_for_url http://127.0.0.1:8765/health; then
+    print -u2 -- "The radio collector did not start. See logs/collector.log."
+    stop_dashboard
+    return 1
+  fi
+  adopt_listener 8765 "$collector_pid_file" || true
+  if ! wait_for_url http://localhost:3000/; then
+    print -u2 -- "The dashboard page did not start. See logs/dashboard.log."
+    stop_dashboard
+    return 1
+  fi
+  adopt_listener 3000 "$frontend_pid_file" || true
+
+  print -- "Conference dashboard is ready."
+  print -- "Meshtastic: $meshtastic_port"
+  print -- "Address: http://localhost:3000/"
+  if [[ "${DASHBOARD_NO_OPEN:-0}" != "1" ]]; then
+    open http://localhost:3000/
+  fi
+}
+
+stop_dashboard() {
+  adopt_if_owned 3000 "$frontend_pid_file" frontend || true
+  adopt_if_owned 8765 "$collector_pid_file" collector || true
+  stop_owned_process "$frontend_pid_file" "frontend"
+  stop_owned_process "$collector_pid_file" "collector"
+  "$regtest_controller" stop >>"$logs_dir/collector.log" 2>&1 || true
+  print -- "Conference dashboard stopped."
+}
+
+case "${1:-status}" in
+  start) start_dashboard ;;
+  stop) stop_dashboard ;;
+  restart) stop_dashboard && start_dashboard ;;
+  status) show_status ;;
+  *)
+    print -u2 -- "Usage: $0 {start|stop|restart|status}"
+    exit 2
+    ;;
+esac

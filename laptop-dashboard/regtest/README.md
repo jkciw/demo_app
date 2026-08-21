@@ -1,0 +1,35 @@
+# Conference Regtest bundle
+
+This directory owns a dedicated Bitcoin Core Regtest chain for the conference
+demo. It does not use the normal Bitcoin Core data directory.
+
+Create the development bundle:
+
+```sh
+python3 bootstrap.py
+```
+
+The first run mines the funding chain, creates one RPC smoke transaction, and
+leaves four independent signed transactions unspent under `generated/`: two
+for Alpha and two for Bravo. Later runs verify and report the existing bundle
+without replacing it.
+
+Control or inspect the node:
+
+```sh
+./regtestctl start
+./regtestctl status
+./regtestctl cli getblockchaininfo
+./regtestctl stop
+```
+
+The signed transactions depend on the exact chain under `data/`. Do not delete
+that directory while using the generated transactions.
+
+Verify the laptop transaction bridge with a fresh test-only transaction:
+
+```sh
+python3 bridge_smoke.py
+```
+
+This mines two additional blocks but does not spend any Alpha or Bravo input.

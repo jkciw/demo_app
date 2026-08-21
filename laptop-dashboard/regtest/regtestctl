@@ -1,0 +1,94 @@
+#!/bin/zsh
+set -euo pipefail
+
+regtest_dir="${0:A:h}"
+data_dir="$regtest_dir/data"
+config_file="$regtest_dir/bitcoin.conf"
+bitcoin_cli="${BITCOIN_CLI:-$(command -v bitcoin-cli)}"
+bitcoind="${BITCOIND:-$(command -v bitcoind)}"
+
+mkdir -p "$data_dir"
+
+cli() {
+  "$bitcoin_cli" -datadir="$data_dir" -conf="$config_file" -regtest "$@"
+}
+
+is_ready() {
+  cli getblockchaininfo >/dev/null 2>&1
+}
+
+ensure_demo_wallet() {
+  if cli listwalletdir 2>/dev/null | grep -q '"name": "conference-demo"'; then
+    if ! cli -rpcwallet=conference-demo getwalletinfo >/dev/null 2>&1; then
+      cli loadwallet conference-demo >/dev/null
+      print -- "Conference demo wallet loaded."
+    fi
+  fi
+}
+
+start_node() {
+  if is_ready; then
+    ensure_demo_wallet
+    print -- "Regtest node is already running."
+    return 0
+  fi
+  "$bitcoind" -datadir="$data_dir" -conf="$config_file" -regtest
+  cli -rpcwait -rpcwaittimeout=60 getblockchaininfo >/dev/null
+  ensure_demo_wallet
+  print -- "Regtest node started on RPC port 18443."
+}
+
+stop_node() {
+  if ! is_ready; then
+    print -- "Regtest node is already stopped."
+    return 0
+  fi
+  local pid_file="$data_dir/regtest/bitcoind.pid"
+  local daemon_pid=""
+  if [[ -f "$pid_file" ]]; then
+    daemon_pid="$(<"$pid_file")"
+  fi
+  cli stop >/dev/null
+  local count=0
+  while (( count < 200 )); do
+    if [[ "$daemon_pid" == <-> ]] && kill -0 "$daemon_pid" 2>/dev/null; then
+      sleep 0.1
+      (( count += 1 ))
+      continue
+    fi
+    if ! is_ready; then
+      break
+    fi
+    sleep 0.1
+    (( count += 1 ))
+  done
+  if [[ "$daemon_pid" == <-> ]] && kill -0 "$daemon_pid" 2>/dev/null; then
+    print -u2 -- "Regtest node did not stop within 20 seconds."
+    return 1
+  fi
+  print -- "Regtest node stopped."
+}
+
+status_node() {
+  if ! is_ready; then
+    print -- "Regtest node: stopped"
+    return 1
+  fi
+  local height="$(cli getblockcount)"
+  local best_hash="$(cli getbestblockhash)"
+  print -- "Regtest node: running"
+  print -- "Block height: $height"
+  print -- "Best block: $best_hash"
+}
+
+case "${1:-status}" in
+  start) start_node ;;
+  stop) stop_node ;;
+  restart) stop_node && start_node ;;
+  status) status_node ;;
+  cli) shift; cli "$@" ;;
+  *)
+    print -u2 -- "Usage: $0 {start|stop|restart|status|cli <rpc command>}"
+    exit 2
+    ;;
+esac

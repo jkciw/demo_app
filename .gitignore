@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Built application artifacts
+*.apk
+
+# Local captures and runtime logs
+/logs/
+
+# Editor-local files
+.idea/
+*.iml
+

@@ -1,0 +1,15 @@
+node_modules/
+.DS_Store
+.dashboard.env
+.runtime/
+.vinext/
+.next/
+.wrangler/
+dist/
+.venv/
+state/
+logs/
+regtest/data/
+regtest/generated/
+__pycache__/
+*.pyc
