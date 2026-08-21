@@ -74,5 +74,7 @@ In `github.com/jkciw/demo_app`, open **Settings → Secrets and variables → Ac
 repository secret `ANDROID_DEBUG_KEYSTORE_BASE64`, and paste the clipboard value. Treat that secret
 as a conference-demo signing credential. The workflow verifies its public certificate fingerprint
 and the finished APK's certificate against the identity already installed on the conference phones.
-It refuses to publish a mismatched APK. If the local debug keystore changes, remote APKs will no
-longer update installations signed with the previous key.
+The Android build receives the restored keystore through `DEMO_DEBUG_KEYSTORE_PATH`, rather than
+depending on a runner-specific default location. It refuses to publish a mismatched APK. If the
+local debug keystore changes, remote APKs will no longer update installations signed with the
+previous key.

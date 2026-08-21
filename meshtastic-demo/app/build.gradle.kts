@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val demoDebugKeystorePath = providers.environmentVariable("DEMO_DEBUG_KEYSTORE_PATH")
+
 android {
     namespace = "network.resilientcomms.meshdemo"
     compileSdk = 37
@@ -16,6 +18,17 @@ android {
         resValue("string", "app_name", "Meshtastic Conference Demo")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            demoDebugKeystorePath.orNull?.takeIf(String::isNotBlank)?.let { keystorePath ->
+                storeFile = file(keystorePath)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {

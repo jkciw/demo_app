@@ -31,6 +31,7 @@ jobs:
         working-directory: meshtastic-demo
     env:
       DEMO_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+      DEMO_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/conference-debug.keystore
       EXPECTED_DEBUG_CERT_SHA256: 02deb30ff9f54751942495aad93d7d2f60b3c9330a58df2c3051e789f89bac2c
 
     steps:
@@ -56,9 +57,8 @@ jobs:
             echo "::error::ANDROID_DEBUG_KEYSTORE_BASE64 is not configured"
             exit 1
           fi
-          mkdir -p "${HOME}/.android"
-          printf '%s' "${DEMO_DEBUG_KEYSTORE_BASE64}" | base64 --decode > "${HOME}/.android/debug.keystore"
-          chmod 600 "${HOME}/.android/debug.keystore"
+          printf '%s' "${DEMO_DEBUG_KEYSTORE_BASE64}" | base64 --decode > "${DEMO_DEBUG_KEYSTORE_PATH}"
+          chmod 600 "${DEMO_DEBUG_KEYSTORE_PATH}"
 
       - name: Verify conference signing identity
         if: github.event_name != 'pull_request'
@@ -66,7 +66,7 @@ jobs:
         run: |
           actual_fingerprint="$(
             keytool -J-Duser.language=en -list -v \
-              -keystore "${HOME}/.android/debug.keystore" \
+              -keystore "${DEMO_DEBUG_KEYSTORE_PATH}" \
               -storepass android \
               -alias androiddebugkey \
               | awk -F': ' '/SHA256:/{gsub(":", "", $2); print tolower($2); exit}'
