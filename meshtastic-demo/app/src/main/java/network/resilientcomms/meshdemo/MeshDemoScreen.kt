@@ -293,7 +293,7 @@ private fun HomeScreen(
     Spacer(Modifier.height(18.dp))
     ImmersiveMeshHero()
     Spacer(Modifier.height(14.dp))
-    ExperienceSheet(onStart, onOpenBitcoin)
+    ExperienceSheet(state, onStart, onOpenBitcoin)
 }
 
 @Composable
@@ -387,7 +387,7 @@ private fun MeshOrbit(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ExperienceSheet(onMessage: () -> Unit, onBitcoin: () -> Unit) {
+private fun ExperienceSheet(state: MeshDemoState, onMessage: () -> Unit, onBitcoin: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF121F33)),
         shape = RoundedCornerShape(28.dp),
@@ -397,17 +397,39 @@ private fun ExperienceSheet(onMessage: () -> Unit, onBitcoin: () -> Unit) {
             Text("CHOOSE AN EXPERIENCE", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Black)
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ExperienceTile("↗", "Send a mesh\nmessage", Cyan, onMessage)
-                ExperienceTile("₿", "Relay\nBitcoin", BitcoinOrange, onBitcoin)
+                ExperienceTile("↗", "Send a mesh\nmessage", Cyan, enabled = true, onClick = onMessage)
+                ExperienceTile(
+                    symbol = "₿",
+                    title = if (state.isGatewayAvailable) "Relay\nBitcoin" else "Gateway\nnot visible",
+                    accent = BitcoinOrange,
+                    enabled = state.canOpenBitcoin,
+                    onClick = onBitcoin,
+                )
+            }
+            if (!state.isGatewayAvailable) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Bitcoin relay becomes available when the laptop Gateway appears on the mesh.",
+                    color = Muted,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ExperienceTile(symbol: String, title: String, accent: Color, onClick: () -> Unit) {
+private fun ExperienceTile(
+    symbol: String,
+    title: String,
+    accent: Color,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
     Button(
         onClick = onClick,
+        enabled = enabled,
         colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Navy),
         contentPadding = PaddingValues(16.dp),
         shape = RoundedCornerShape(20.dp),
@@ -477,8 +499,15 @@ private fun RadioSetupCard(
                     Spacer(Modifier.height(8.dp))
                     Text("Keep the radio powered on and close to this phone.", color = Muted, lineHeight = 21.sp)
                 }
-                RadioStatus.NO_PAIRED_RADIO -> {
-                    Text("No paired radio found", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                RadioStatus.NO_PAIRED_RADIO,
+                RadioStatus.PAIRING_REQUIRED,
+                -> {
+                    Text(
+                        if (state.radioStatus == RadioStatus.PAIRING_REQUIRED) "Radio pairing was lost" else "No paired radio found",
+                        color = Color.White,
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "Pair the attached Meshtastic radio in Android Bluetooth settings, then scan again.",
@@ -672,8 +701,18 @@ private fun RadioSelectionScreen(
                         }
                     }
                 }
-                RadioStatus.NO_PAIRED_RADIO -> {
-                    Text("No paired Meshtastic radios found", color = Color.White, fontWeight = FontWeight.Bold)
+                RadioStatus.NO_PAIRED_RADIO,
+                RadioStatus.PAIRING_REQUIRED,
+                -> {
+                    Text(
+                        if (state.radioStatus == RadioStatus.PAIRING_REQUIRED) {
+                            "The attached radio is no longer paired"
+                        } else {
+                            "No paired Meshtastic radios found"
+                        },
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Spacer(Modifier.height(5.dp))
                     Text("Complete pairing in Android, return here, and scan again.", color = Muted, fontSize = 13.sp)
                 }
@@ -700,7 +739,8 @@ private fun RadioReconnectScreen(
     onDone: () -> Unit,
 ) {
     val complete = state.radioStatus == RadioStatus.CONNECTED
-    val failed = state.radioStatus == RadioStatus.ERROR
+    val pairingRequired = state.radioStatus == RadioStatus.PAIRING_REQUIRED
+    val failed = state.radioStatus == RadioStatus.ERROR || pairingRequired
     Text("Reconnect attached radio", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black)
     Spacer(Modifier.height(7.dp))
     Text(
@@ -743,6 +783,7 @@ private fun RadioReconnectScreen(
             Text(
                 when {
                     complete -> "Radio reconnected"
+                    pairingRequired -> "Pairing required"
                     failed -> "Reconnect failed"
                     else -> "Rebuilding radio link…"
                 },
@@ -765,6 +806,7 @@ private fun RadioReconnectScreen(
     Spacer(Modifier.height(16.dp))
     when {
         complete -> PrimaryButton("RETURN TO OPERATOR CONSOLE", onDone, enabled = true)
+        pairingRequired -> PrimaryButton("RETURN TO OPERATOR CONSOLE", onDone, enabled = true)
         failed -> PrimaryButton("TRY RECONNECT AGAIN", onRetry, enabled = true)
         else -> Text(
             "You can use Back to return to the Operator Console while reconnection continues.",
@@ -911,14 +953,26 @@ private fun BitcoinRelayCard(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "${state.bitcoinRemaining} remaining · laptop gateway !2303a141",
-                color = Muted,
+                if (state.isGatewayAvailable) {
+                    "${state.bitcoinRemaining} remaining · Gateway ${state.gatewayNodeNumber?.asNodeId()} online"
+                } else {
+                    "${state.bitcoinRemaining} remaining · waiting for Gateway presence"
+                },
+                color = if (state.isGatewayAvailable) Muted else Danger,
                 fontSize = 12.sp,
             )
             Spacer(Modifier.height(14.dp))
             Text(
-                state.bitcoinStatusText,
-                color = bitcoinStatusColor(state.bitcoinRelayProgress),
+                if (!state.isGatewayAvailable && !state.isBitcoinRelayActive) {
+                    "Gateway is not currently visible on the mesh"
+                } else {
+                    state.bitcoinStatusText
+                },
+                color = if (!state.isGatewayAvailable && !state.isBitcoinRelayActive) {
+                    Danger
+                } else {
+                    bitcoinStatusColor(state.bitcoinRelayProgress)
+                },
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -943,6 +997,7 @@ private fun BitcoinRelayCard(
             if (state.bitcoinRemaining > 0) {
                 val label = when {
                     state.isBitcoinRelayActive -> "RELAY IN PROGRESS"
+                    !state.isGatewayAvailable -> "WAITING FOR GATEWAY"
                     state.bitcoinRelayProgress == BitcoinRelayProgress.FAILED -> "RETRY SIGNED TRANSACTION"
                     else -> "RELAY NEXT SIGNED TRANSACTION"
                 }
@@ -1349,7 +1404,7 @@ private fun GatewayServicesScreen(
         SendStatusLine(state)
         OutlinedButton(
             onClick = onOpenBitcoin,
-            enabled = state.isConnected && !state.isBitcoinRelayActive,
+            enabled = state.canOpenBitcoin && !state.isBitcoinRelayActive,
             colors = ButtonDefaults.outlinedButtonColors(contentColor = BitcoinOrange),
             modifier = Modifier.fillMaxWidth().height(44.dp),
         ) {
@@ -1700,6 +1755,7 @@ private fun SecondaryButton(label: String, onClick: () -> Unit, enabled: Boolean
 private val RADIO_SETUP_STATES = setOf(
     RadioStatus.SCANNING,
     RadioStatus.NO_PAIRED_RADIO,
+    RadioStatus.PAIRING_REQUIRED,
     RadioStatus.SELECTION_REQUIRED,
 )
 

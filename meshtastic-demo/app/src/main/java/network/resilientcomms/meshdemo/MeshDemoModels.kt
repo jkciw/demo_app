@@ -68,6 +68,7 @@ enum class RadioStatus {
     PERMISSION_REQUIRED,
     SCANNING,
     NO_PAIRED_RADIO,
+    PAIRING_REQUIRED,
     SELECTION_REQUIRED,
     DISCONNECTED,
     CONNECTING,
@@ -186,6 +187,13 @@ data class MeshDemoState(
             draft.isNotBlank() && draftBytes <= MAX_TEXT_BYTES &&
             sendProgress !in setOf(SendProgress.QUEUED, SendProgress.SENT_TO_RADIO)
     val bitcoinRemaining: Int get() = (bitcoinQueueTotal - bitcoinQueueIndex).coerceAtLeast(0)
+    val gatewayRecipient: MeshRecipient?
+        get() = recipients.firstOrNull { it.kind == RecipientKind.GATEWAY }
+    val gatewayNodeNumber: Int? get() = gatewayRecipient?.nodeNumber
+    val isGatewayAvailable: Boolean
+        get() = gatewayRecipient?.isAvailable == true && gatewayNodeNumber != null
+    val canOpenBitcoin: Boolean
+        get() = stationRole != null && isConnected && isGatewayAvailable
     val isBitcoinRelayActive: Boolean
         get() = bitcoinRelayProgress in setOf(
             BitcoinRelayProgress.SENDING,
@@ -193,7 +201,7 @@ data class MeshDemoState(
             BitcoinRelayProgress.BROADCAST,
         )
     val canRelayBitcoin: Boolean
-        get() = stationRole != null && isConnected && bitcoinRemaining > 0 && !isBitcoinRelayActive
+        get() = canOpenBitcoin && bitcoinRemaining > 0 && !isBitcoinRelayActive
 }
 
 internal val StationRole.conferenceIdentity: ConferenceIdentity
@@ -327,7 +335,9 @@ internal fun isGatewaySource(
     nodeNumber: Int,
     presences: Collection<StationPresence>,
     nowMs: Long = System.currentTimeMillis(),
+    expectedGatewayNodeNumber: Int? = null,
 ): Boolean = nodeNumber == LAPTOP_NODE_NUMBER ||
+    nodeNumber == expectedGatewayNodeNumber ||
     latestPresence(ConferenceIdentity.GATEWAY, presences, nowMs)?.nodeNumber == nodeNumber
 
 private fun KnownMeshNode.isConferenceNode(role: StationRole): Boolean {

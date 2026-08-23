@@ -2,6 +2,9 @@
 
 [Download the latest Android APK](https://github.com/jkciw/demo_app/releases/latest/download/Meshtastic-Conference-Demo.apk)
 
+Current conference build: **v0.2.0 — BLE reliability**. The release page includes a plain-language
+change summary and a SHA-256 checksum alongside the universal APK.
+
 This is the complete application package. Android offers **Install** on a new phone and **Update**
 when the same signing identity is already installed; an update preserves the app's existing radio,
 identity, and transaction-queue state.

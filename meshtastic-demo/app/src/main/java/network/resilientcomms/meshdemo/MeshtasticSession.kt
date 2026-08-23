@@ -5,6 +5,7 @@ package network.resilientcomms.meshdemo
 
 import android.annotation.SuppressLint
 import android.app.Application
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.os.Build
@@ -29,7 +30,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import org.meshtastic.proto.NodeInfo
-import org.meshtastic.sdk.AutoReconnectConfig
 import org.meshtastic.sdk.ChannelIndex
 import org.meshtastic.sdk.ConnectionState
 import org.meshtastic.sdk.LogLevel
@@ -87,7 +87,12 @@ class MeshtasticSession(
         if (_state.value.stationRole == null) return
         val selectedAddress = _state.value.selectedRadioAddress
         if (selectedAddress != null && isBluetoothAddress(selectedAddress)) {
-            connectRadio(selectedAddress, _state.value.selectedRadioName)
+            val selectedName = _state.value.selectedRadioName
+            if (isRadioBonded(selectedAddress)) {
+                connectRadio(selectedAddress, selectedName)
+            } else {
+                stopForMissingBond(selectedAddress, selectedName)
+            }
         } else {
             discoverRadios()
         }
@@ -173,6 +178,8 @@ class MeshtasticSession(
     fun selectRadio(address: String) {
         val radio = _state.value.discoveredRadios.firstOrNull { it.address == address && it.isBonded } ?: return
         val returnToOperator = _state.value.step == DemoStep.RADIO_SELECTION
+        val keepCurrentConnection =
+            radio.address == desiredRadioAddress && client?.connection?.value is ConnectionState.Connected
         discoveryJob?.cancel()
         discoveryJob = null
         radioChangeJob = null
@@ -181,43 +188,42 @@ class MeshtasticSession(
         radioSelectionPreviousName = null
         if (returnToOperator) _state.update { it.copy(step = DemoStep.OPERATOR) }
         saveSelectedRadio(radio)
+        if (keepCurrentConnection) {
+            _state.update {
+                it.copy(
+                    step = if (returnToOperator) DemoStep.OPERATOR else it.step,
+                    radioStatus = RadioStatus.CONNECTED,
+                    statusText = "Connected to ${radio.displayName}",
+                    discoveredRadios = emptyList(),
+                )
+            }
+            return
+        }
         connectRadio(radio.address, radio.displayName)
     }
 
     fun changeRadio() {
         radioChangeJob?.cancel()
-        radioChangeJob = scope.launch {
-            Log.i(TAG, "Change radio requested; current=${_state.value.selectedRadioAddress}")
-            discoveryJob?.cancel()
-            discoveryJob = null
-            radioSelectionPreviousAddress = _state.value.selectedRadioAddress
-            radioSelectionPreviousName = _state.value.selectedRadioName
-            desiredRadioAddress = null
-            desiredRadioName = null
-            requireExplicitRadioSelection = true
-            connectJob?.cancel()
-            connectJob = null
-            recoveryJob?.cancel()
-            recoveryJob = null
-            _state.update {
-                it.copy(
-                    step = DemoStep.RADIO_SELECTION,
-                    radioStatus = RadioStatus.SCANNING,
-                    statusText = "Switching radio…",
-                    discoveredRadios = emptyList(),
-                )
-            }
-            connectionMutex.withLock {
-                disconnectLocked()
-            }
-            discoverRadios()
+        radioChangeJob = null
+        Log.i(TAG, "Change radio opened; preserving current=${_state.value.selectedRadioAddress}")
+        discoveryJob?.cancel()
+        discoveryJob = null
+        radioSelectionPreviousAddress = _state.value.selectedRadioAddress
+        radioSelectionPreviousName = _state.value.selectedRadioName
+        requireExplicitRadioSelection = true
+        _state.update {
+            it.copy(
+                step = DemoStep.RADIO_SELECTION,
+                radioStatus = RadioStatus.SCANNING,
+                statusText = "Checking paired radios…",
+                discoveredRadios = emptyList(),
+            )
         }
+        discoverRadios()
     }
 
     fun cancelRadioChange() {
         if (_state.value.step != DemoStep.RADIO_SELECTION) return
-        val previousAddress = radioSelectionPreviousAddress
-        val previousName = radioSelectionPreviousName
         radioChangeJob?.cancel()
         radioChangeJob = null
         discoveryJob?.cancel()
@@ -225,21 +231,18 @@ class MeshtasticSession(
         requireExplicitRadioSelection = false
         radioSelectionPreviousAddress = null
         radioSelectionPreviousName = null
-        _state.update {
-            it.copy(
+        val connection = client?.connection?.value
+        _state.update { current ->
+            val restored = connection?.let(current::withConnection) ?: current.copy(
+                radioStatus = RadioStatus.DISCONNECTED,
+                statusText = "Radio disconnected",
+            )
+            restored.copy(
                 step = DemoStep.OPERATOR,
                 discoveredRadios = emptyList(),
-                radioStatus = RadioStatus.DISCONNECTED,
-                statusText = if (previousAddress != null) {
-                    "Restoring ${previousName ?: "attached radio"}…"
-                } else {
-                    "No radio selected"
-                },
             )
         }
-        if (previousAddress != null && isBluetoothAddress(previousAddress)) {
-            connectRadio(previousAddress, previousName)
-        }
+        Log.i(TAG, "Change radio cancelled; existing BLE session preserved")
     }
 
     private fun discoverRadios() {
@@ -391,6 +394,10 @@ class MeshtasticSession(
     }
 
     private fun connectRadio(address: String, name: String?) {
+        if (!isRadioBonded(address)) {
+            stopForMissingBond(address, name)
+            return
+        }
         desiredRadioAddress = address
         desiredRadioName = name
         connectJob?.cancel()
@@ -402,6 +409,10 @@ class MeshtasticSession(
     }
 
     private suspend fun connectOnce(address: String, name: String?, isRecovery: Boolean): Boolean {
+        if (!isRadioBonded(address)) {
+            stopForMissingBond(address, name)
+            return false
+        }
         var alreadyConnected = false
         val radioClient = connectionMutex.withLock {
             if (desiredRadioAddress != address) return@withLock null
@@ -412,6 +423,10 @@ class MeshtasticSession(
 
             disconnectLocked()
             if (desiredRadioAddress != address) return@withLock null
+            if (!isRadioBonded(address)) {
+                stopForMissingBond(address, name)
+                return@withLock null
+            }
             val displayName = name ?: _state.value.radioDisplayName
             _state.update {
                 it.copy(
@@ -432,7 +447,6 @@ class MeshtasticSession(
                 )
                 .storage(SqlDelightStorageProvider(application.filesDir.absolutePath))
                 .logger(SDK_LOGGER)
-                .autoReconnect(AutoReconnectConfig())
                 .build()
                 .also {
                     client = it
@@ -453,15 +467,19 @@ class MeshtasticSession(
         } catch (exception: Exception) {
             Log.e(TAG, "BLE connection failed", exception)
             if (client === radioClient && desiredRadioAddress == address) {
-                _state.update {
-                    it.copy(
-                        radioStatus = if (isRecovery) RadioStatus.RECONNECTING else RadioStatus.ERROR,
-                        statusText = if (isRecovery) {
-                            "Reconnect failed · trying again"
-                        } else {
-                            exception.message ?: "Could not connect to $displayName"
-                        },
-                    )
+                if (!isRadioBonded(address)) {
+                    stopForMissingBond(address, name)
+                } else {
+                    _state.update {
+                        it.copy(
+                            radioStatus = if (isRecovery) RadioStatus.RECONNECTING else RadioStatus.ERROR,
+                            statusText = if (isRecovery) {
+                                "Reconnect failed · trying again"
+                            } else {
+                                exception.message ?: "Could not connect to $displayName"
+                            },
+                        )
+                    }
                 }
             }
             false
@@ -547,6 +565,11 @@ class MeshtasticSession(
     fun reconnectRadio() {
         val address = _state.value.selectedRadioAddress?.takeIf(::isBluetoothAddress) ?: return
         val name = _state.value.selectedRadioName
+        if (!isRadioBonded(address)) {
+            _state.update { it.copy(step = DemoStep.RADIO_RECONNECT) }
+            stopForMissingBond(address, name)
+            return
+        }
         _state.update {
             it.copy(
                 step = DemoStep.RADIO_RECONNECT,
@@ -574,7 +597,7 @@ class MeshtasticSession(
     }
 
     fun openBitcoin() {
-        if (_state.value.isConnected) {
+        if (_state.value.canOpenBitcoin) {
             _state.update { it.copy(step = DemoStep.BITCOIN) }
         }
     }
@@ -881,17 +904,23 @@ class MeshtasticSession(
                     }
                     null -> Unit
                 }
-                if (isGatewaySource(packet.from, _state.value.presences) && text.startsWith("BTC_")) {
-                    val reply = parseBitcoinReply(text)
-                    if (reply != null) {
-                        bitcoinReplies.emit(reply)
-                        Log.i(TAG, "Bitcoin reply=$reply")
-                        return@onEach
+                if (text.startsWith("BTC_")) {
+                    val current = _state.value
+                    if (
+                        isGatewaySource(
+                            nodeNumber = packet.from,
+                            presences = current.presences,
+                            expectedGatewayNodeNumber = current.gatewayNodeNumber,
+                        )
+                    ) {
+                        val reply = parseBitcoinReply(text)
+                        if (reply != null) {
+                            bitcoinReplies.emit(reply)
+                            Log.i(TAG, "Bitcoin reply=$reply")
+                        }
                     }
-                }
-                if (text.startsWith("BTC_TX|")) {
-                    // A second participant phone may hear the broadcast chunks. They are
-                    // gateway protocol traffic, not participant chat messages.
+                    // Bitcoin chunks and replies use the shared primary channel for
+                    // reliability. They are reserved protocol traffic, not chat messages.
                     return@onEach
                 }
                 val advertisedName = knownNodes[packet.from]?.longName
@@ -925,6 +954,10 @@ class MeshtasticSession(
         recoveryJob = scope.launch {
             var attempt = 1
             while (desiredRadioAddress == address) {
+                if (!isRadioBonded(address)) {
+                    stopForMissingBond(address, name)
+                    return@launch
+                }
                 val delayMs = (RECOVERY_INITIAL_DELAY_MS * (1L shl (attempt - 1).coerceAtMost(4)))
                     .coerceAtMost(RECOVERY_MAX_DELAY_MS)
                 Log.w(TAG, "Scheduling BLE recovery attempt=$attempt delayMs=$delayMs radio=${name ?: address}")
@@ -935,9 +968,43 @@ class MeshtasticSession(
                     )
                 }
                 delay(delayMs)
+                if (!isRadioBonded(address)) {
+                    stopForMissingBond(address, name)
+                    return@launch
+                }
                 if (connectOnce(address, name, isRecovery = true)) return@launch
                 attempt += 1
             }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun isRadioBonded(address: String): Boolean {
+        val adapter = application.getSystemService(BluetoothManager::class.java)?.adapter ?: return false
+        return try {
+            adapter.getRemoteDevice(address).bondState == BluetoothDevice.BOND_BONDED
+        } catch (exception: IllegalArgumentException) {
+            false
+        } catch (exception: SecurityException) {
+            permissionRequired()
+            false
+        }
+    }
+
+    private fun stopForMissingBond(address: String, name: String?) {
+        if (desiredRadioAddress == address) {
+            desiredRadioAddress = null
+            desiredRadioName = null
+        }
+        recoveryJob = null
+        stopPresenceLoop()
+        val displayName = name ?: _state.value.radioDisplayName
+        Log.w(TAG, "BLE recovery stopped; radio is not bonded address=$address name=$displayName")
+        _state.update {
+            it.copy(
+                radioStatus = RadioStatus.PAIRING_REQUIRED,
+                statusText = "$displayName is no longer paired · operator action required",
+            )
         }
     }
 

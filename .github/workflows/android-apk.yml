@@ -138,6 +138,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Check out release notes
+        uses: actions/checkout@v6
+
       - name: Download verified APK
         uses: actions/download-artifact@v7
         with:
@@ -149,7 +152,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          tag="meshtastic-build-${GITHUB_SHA:0:12}"
+          version="$(
+            sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' \
+              meshtastic-demo/app/build.gradle.kts
+          )"
+          if [[ -z "${version}" ]]; then
+            echo "::error::Could not determine the Android versionName"
+            exit 1
+          fi
+
+          tag="meshtastic-v${version}-${GITHUB_SHA:0:7}"
+          title="Meshtastic Conference Demo v${version} — BLE reliability"
+          notes="meshtastic-demo/RELEASE_NOTES.md"
           apk="release/Meshtastic-Conference-Demo.apk"
           checksum="release/Meshtastic-Conference-Demo.apk.sha256"
 
@@ -158,14 +172,16 @@ jobs:
               --clobber \
               --repo "${GITHUB_REPOSITORY}"
             gh release edit "${tag}" \
+              --title "${title}" \
+              --notes-file "${notes}" \
               --latest \
               --repo "${GITHUB_REPOSITORY}"
           else
             gh release create "${tag}" "${apk}" "${checksum}" \
               --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
-              --title "Meshtastic Conference Demo ${GITHUB_SHA:0:12}" \
-              --generate-notes \
+              --title "${title}" \
+              --notes-file "${notes}" \
               --latest
           fi
 

@@ -136,17 +136,29 @@ class MeshDemoModelsTest {
 
     @Test
     fun bitcoinRelayOnlyEnablesForConnectedStationWithRemainingTransaction() {
+        val gateway = MeshRecipient(
+            id = "gateway",
+            nodeNumber = 77,
+            displayName = "Gateway",
+            description = "Gateway presence active",
+            kind = RecipientKind.GATEWAY,
+            isAvailable = true,
+        )
         val ready = MeshDemoState(
             stationRole = StationRole.BRAVO,
             radioStatus = RadioStatus.CONNECTED,
+            recipients = listOf(gateway),
             bitcoinQueueTotal = 2,
             bitcoinQueueIndex = 0,
         )
 
+        assertTrue(ready.canOpenBitcoin)
         assertTrue(ready.canRelayBitcoin)
         assertFalse(ready.copy(radioStatus = RadioStatus.DISCONNECTED).canRelayBitcoin)
         assertFalse(ready.copy(bitcoinQueueIndex = 2).canRelayBitcoin)
         assertFalse(ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.SENDING).canRelayBitcoin)
+        assertFalse(ready.copy(recipients = emptyList()).canOpenBitcoin)
+        assertFalse(ready.copy(recipients = listOf(gateway.copy(isAvailable = false))).canRelayBitcoin)
     }
 
     @Test
@@ -236,6 +248,14 @@ class MeshDemoModelsTest {
         assertEquals(gatewayNode, contacts[1].nodeNumber)
         assertTrue(contacts[1].isAvailable)
         assertTrue(isGatewaySource(gatewayNode, listOf(presence), nowMs))
+        assertTrue(
+            isGatewaySource(
+                nodeNumber = gatewayNode,
+                presences = emptyList(),
+                nowMs = nowMs,
+                expectedGatewayNodeNumber = gatewayNode,
+            ),
+        )
         assertFalse(isGatewaySource(78, listOf(presence), nowMs))
     }
 

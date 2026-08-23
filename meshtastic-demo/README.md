@@ -20,9 +20,9 @@ choice controls the visible station identity and selects an independent
 signed-transaction queue; it is saved locally.
 
 Alice and Bob are app identities, not radio identities. Each connected phone broadcasts a small
-`DEMO_PRESENCE` control frame immediately after connecting and once per minute. The laptop does
-the same for **Gateway**. The packet's Meshtastic source node is then mapped to Alice, Bob, or
-Gateway for three minutes. This means the two LilyGo radios can be exchanged between the phones
+`DEMO_PRESENCE` control frame after connecting and every five minutes. The laptop does the same
+for **Gateway**. The packet's Meshtastic source node is then mapped to Alice, Bob, or Gateway for
+ten minutes. This means the two LilyGo radios can be exchanged between the phones
 without swapping the visitor identities. Presence request and announcement frames are hidden from
 chat and from the laptop message wall. Radio long names are only a compatibility fallback.
 
@@ -39,7 +39,9 @@ That console can refresh presence, reconnect, change the paired radio, change Al
 detect duplicate identity claims, and reset the signed-transaction queue. **Change radio** always
 stops at the operator selection screen, even when only one Meshtastic radio is currently paired;
 only radios already paired in Android are listed. Pair a replacement in Android Bluetooth settings
-beforehand, then return to the app, press **Scan again**, and select it.
+beforehand, then return to the app, press **Scan again**, and select it. Opening this page, scanning,
+or pressing Back preserves the working radio connection. The app disconnects only after the
+operator selects a different bonded radio.
 
 Operator actions use consistent subpages. **Change phone identity** returns to the Operator Console
 when Back is pressed or Alice/Bob is selected. **Reconnect attached radio** opens a dedicated
@@ -48,11 +50,12 @@ progress screen and reports success or failure before returning to the Operator 
 After permission is granted, a foreground connected-device service owns the app's single
 Meshtastic client. The persistent **radio link** notification confirms that the service is alive.
 Leaving the screen, locking the phone, or Android recreating the activity no longer closes BLE;
-**Change radio** in the operator console is the controlled disconnect. If the SDK declares an otherwise healthy
-idle BLE session stale, the service rebuilds the client with bounded backoff and completes a fresh
-handshake without reopening the app. For the conference, also exempt the app from the phone's
-battery optimisation and keep the official Meshtastic app closed so only one phone app owns each
-radio.
+the operator must explicitly select a different paired radio before the existing link is closed. If
+the SDK declares an otherwise healthy idle BLE session stale, the service rebuilds the client with
+bounded backoff and completes a fresh handshake without reopening the app. If Android has removed
+the bond, retries stop and the app asks the operator to pair the radio again instead of repeatedly
+triggering pairing-code prompts. For the conference, also exempt the app from the phone's battery
+optimisation and keep the official Meshtastic app closed so only one phone app owns each radio.
 
 ## Hardware proof
 
