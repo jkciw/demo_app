@@ -519,20 +519,6 @@ class MeshtasticSession(
         }
     }
 
-    fun continueConversation() {
-        if (_state.value.selectedRecipient == null) returnToContacts() else {
-            _state.update {
-                it.copy(
-                    step = DemoStep.COMPOSE,
-                    draft = "",
-                    sendProgress = SendProgress.IDLE,
-                    sendStatusText = "",
-                    lastPacketId = null,
-                )
-            }
-        }
-    }
-
     fun openOperator() {
         if (_state.value.isBitcoinRelayActive) return
         _state.update { it.copy(step = DemoStep.OPERATOR) }
@@ -554,8 +540,6 @@ class MeshtasticSession(
                     to = NodeId.BROADCAST,
                     channel = ChannelIndex(0),
                 )
-                delay(PRESENCE_REQUEST_RESPONSE_DELAY_MS)
-                sendPresence(radioClient)
             }.onFailure { Log.w(TAG, "Presence refresh failed", it) }
         }
     }
@@ -608,6 +592,14 @@ class MeshtasticSession(
         if (!sendState.canSend || text.isEmpty()) return
         val destination = recipient.nodeNumber?.let(::NodeId) ?: NodeId.BROADCAST
 
+        _state.update {
+            it.copy(
+                sendProgress = SendProgress.QUEUED,
+                sendStatusText = "Sending to ${recipient.displayName}…",
+                lastPacketId = null,
+            )
+        }
+
         scope.launch {
             try {
                 val handle = radioClient.sendText(
@@ -623,7 +615,8 @@ class MeshtasticSession(
                 )
                 _state.update {
                     it.copy(
-                        step = DemoStep.RESULT,
+                        step = DemoStep.COMPOSE,
+                        draft = "",
                         lastPacketId = packetId,
                         sent = (
                             listOf(
@@ -633,6 +626,7 @@ class MeshtasticSession(
                                     recipient = recipient.displayName,
                                     text = text,
                                     isBroadcast = recipient.isBroadcast,
+                                    recordedAtMs = System.currentTimeMillis(),
                                 ),
                             ) + it.sent
                             ).take(MAX_MESSAGES),
@@ -654,7 +648,7 @@ class MeshtasticSession(
                 Log.e(TAG, "Send failed", exception)
                 _state.update {
                     it.copy(
-                        step = DemoStep.RESULT,
+                        step = DemoStep.COMPOSE,
                         sendProgress = SendProgress.FAILED,
                         sendStatusText = exception.message ?: "Message could not be sent",
                     )
@@ -887,7 +881,7 @@ class MeshtasticSession(
                     }
                     null -> Unit
                 }
-                if (packet.from == LAPTOP_NODE_NUMBER && text.startsWith("BTC_")) {
+                if (isGatewaySource(packet.from, _state.value.presences) && text.startsWith("BTC_")) {
                     val reply = parseBitcoinReply(text)
                     if (reply != null) {
                         bitcoinReplies.emit(reply)
@@ -916,6 +910,7 @@ class MeshtasticSession(
                                     sender = sender,
                                     text = text,
                                     isBroadcast = isBroadcast,
+                                    recordedAtMs = System.currentTimeMillis(),
                                 ),
                             ) + it.received
                             ).take(MAX_MESSAGES),
@@ -995,11 +990,10 @@ class MeshtasticSession(
         if (presenceJob?.isActive == true && client === radioClient) return
         stopPresenceLoop()
         presenceJob = scope.launch {
-            PRESENCE_INITIAL_DELAYS_MS.forEach { delayMs ->
-                delay(delayMs)
-                if (client !== radioClient || !_state.value.isConnected) return@launch
-                sendPresence(radioClient)
-            }
+            val stationOffset = (_state.value.stationRole?.ordinal ?: 0) * PRESENCE_STATION_OFFSET_MS
+            delay(PRESENCE_INITIAL_DELAY_MS + stationOffset)
+            if (client !== radioClient || !_state.value.isConnected) return@launch
+            sendPresence(radioClient)
             while (client === radioClient && _state.value.isConnected) {
                 delay(PRESENCE_INTERVAL_MS)
                 if (client === radioClient && _state.value.isConnected) sendPresence(radioClient)
@@ -1018,7 +1012,10 @@ class MeshtasticSession(
         if (client !== radioClient || !_state.value.isConnected) return
         presenceRequestJob?.cancel()
         presenceRequestJob = scope.launch {
-            delay(PRESENCE_REQUEST_RESPONSE_DELAY_MS + (_state.value.stationRole?.ordinal ?: 0) * 150L)
+            delay(
+                PRESENCE_REQUEST_RESPONSE_DELAY_MS +
+                    (_state.value.stationRole?.ordinal ?: 0) * PRESENCE_STATION_OFFSET_MS,
+            )
             if (client === radioClient && _state.value.isConnected) sendPresence(radioClient)
         }
     }
@@ -1155,9 +1152,10 @@ class MeshtasticSession(
         const val BITCOIN_FINAL_TIMEOUT_MS = 60_000L
         const val RECOVERY_INITIAL_DELAY_MS = 1_000L
         const val RECOVERY_MAX_DELAY_MS = 15_000L
-        const val PRESENCE_REQUEST_RESPONSE_DELAY_MS = 450L
-        const val PRESENCE_INTERVAL_MS = 60_000L
-        val PRESENCE_INITIAL_DELAYS_MS = listOf(0L, 2_000L, 3_000L)
+        const val PRESENCE_INITIAL_DELAY_MS = 5_000L
+        const val PRESENCE_REQUEST_RESPONSE_DELAY_MS = 5_000L
+        const val PRESENCE_STATION_OFFSET_MS = 5_000L
+        const val PRESENCE_INTERVAL_MS = 5 * 60_000L
         val SDK_LOGGER = LogSink { level, tag, message, cause ->
             val sdkTag = "MeshtasticSDK/$tag"
             when (level) {

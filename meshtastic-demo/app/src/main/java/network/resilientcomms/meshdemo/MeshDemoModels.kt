@@ -6,7 +6,7 @@ package network.resilientcomms.meshdemo
 internal const val MAX_TEXT_BYTES = 233
 internal const val BITCOIN_CHUNK_HEX_CHARS = 100
 internal const val LAPTOP_NODE_NUMBER = 0x2303A141
-internal const val PRESENCE_TTL_MS = 3 * 60 * 1000L
+internal const val PRESENCE_TTL_MS = 10 * 60 * 1000L
 internal const val PRESENCE_PREFIX = "DEMO_PRESENCE"
 internal const val PRESENCE_REQUEST = "DEMO_PRESENCE_REQUEST|1"
 
@@ -15,7 +15,6 @@ enum class DemoStep {
     CONTACTS,
     COMPOSE,
     BITCOIN,
-    RESULT,
     OPERATOR,
     RADIO_SELECTION,
     RADIO_RECONNECT,
@@ -136,6 +135,7 @@ data class ReceivedText(
     val sender: String,
     val text: String,
     val isBroadcast: Boolean,
+    val recordedAtMs: Long,
 )
 
 data class SentText(
@@ -144,6 +144,7 @@ data class SentText(
     val recipient: String,
     val text: String,
     val isBroadcast: Boolean,
+    val recordedAtMs: Long,
 )
 
 data class MeshDemoState(
@@ -293,15 +294,15 @@ internal fun conferenceRecipients(
         ),
         MeshRecipient(
             id = "gateway",
-            nodeNumber = gatewayNode?.nodeNumber ?: LAPTOP_NODE_NUMBER,
+            nodeNumber = gatewayNode?.nodeNumber,
             displayName = "Gateway",
-            description = if (gatewayPresence != null) {
-                "Big screen · Gateway presence active"
-            } else {
-                "Show this message on the big screen"
+            description = when {
+                gatewayPresence != null -> "Big screen · Gateway presence active"
+                gatewayNode != null -> "Big screen · Gateway mesh node discovered"
+                else -> "Waiting to see Gateway on the mesh"
             },
             kind = RecipientKind.GATEWAY,
-            isAvailable = true,
+            isAvailable = gatewayNode != null,
         ),
         MeshRecipient(
             id = "everyone",
@@ -321,6 +322,13 @@ internal fun participantName(nodeNumber: Int, advertisedName: String?): String =
     normalizeNodeName(advertisedName.orEmpty()) in GATEWAY_NODE_NAMES -> "Gateway"
     else -> advertisedName?.takeIf(String::isNotBlank) ?: NodeIdLabel.from(nodeNumber)
 }
+
+internal fun isGatewaySource(
+    nodeNumber: Int,
+    presences: Collection<StationPresence>,
+    nowMs: Long = System.currentTimeMillis(),
+): Boolean = nodeNumber == LAPTOP_NODE_NUMBER ||
+    latestPresence(ConferenceIdentity.GATEWAY, presences, nowMs)?.nodeNumber == nodeNumber
 
 private fun KnownMeshNode.isConferenceNode(role: StationRole): Boolean {
     val normalized = normalizeNodeName(longName)

@@ -35,7 +35,6 @@ class MeshDemoViewModel(application: Application) : AndroidViewModel(application
     fun start() = withSession { start() }
     fun selectRecipient(id: String) = withSession { selectRecipient(id) }
     fun returnToContacts() = withSession { returnToContacts() }
-    fun continueConversation() = withSession { continueConversation() }
     fun openOperator() = withSession { openOperator() }
     fun returnToOperator() = withSession { returnToOperator() }
     fun refreshPresence() = withSession { refreshPresence() }

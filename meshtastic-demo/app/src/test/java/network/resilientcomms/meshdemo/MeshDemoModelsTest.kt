@@ -204,7 +204,8 @@ class MeshDemoModelsTest {
         assertEquals(11, available.first().nodeNumber)
         assertTrue(available.first().isAvailable)
         assertFalse(unavailable.first().isAvailable)
-        assertTrue(unavailable[1].isAvailable)
+        assertFalse(unavailable[1].isAvailable)
+        assertEquals(null, unavailable[1].nodeNumber)
     }
 
     @Test
@@ -213,6 +214,29 @@ class MeshDemoModelsTest {
         assertEquals("Bob", participantName(12, "Bravo"))
         assertEquals("Gateway", participantName(LAPTOP_NODE_NUMBER, "anything"))
         assertEquals("Field node", participantName(13, "Field node"))
+    }
+
+    @Test
+    fun gatewayPresence_suppliesCurrentAddressForChatAndBitcoinReplies() {
+        val nowMs = 10_000L
+        val gatewayNode = 77
+        val presence = StationPresence(
+            identity = ConferenceIdentity.GATEWAY,
+            nodeNumber = gatewayNode,
+            session = "gateway-session",
+            lastSeenAtMs = nowMs,
+        )
+        val contacts = conferenceRecipients(
+            role = StationRole.ALPHA,
+            nodes = emptyList(),
+            presences = listOf(presence),
+            nowMs = nowMs,
+        )
+
+        assertEquals(gatewayNode, contacts[1].nodeNumber)
+        assertTrue(contacts[1].isAvailable)
+        assertTrue(isGatewaySource(gatewayNode, listOf(presence), nowMs))
+        assertFalse(isGatewaySource(78, listOf(presence), nowMs))
     }
 
     @Test

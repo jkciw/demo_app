@@ -34,6 +34,10 @@ presence refresh request. These control frames are consumed by the collector and
 the public message list; incoming phone messages are labelled from the most recent app presence,
 not from a hard-coded LilyGo node ID.
 
+The serial connection intentionally skips the firmware's full NodeDB replay. The conference app
+learns Alice, Bob, and Gateway addresses from presence frames, while avoiding an ESP32-S3 serial
+framing failure that can occur during a high-volume NodeDB synchronization.
+
 ## Add the Reticulum RNode
 
 Connect the second USB radio, find its `/dev/cu.*` path, and start with:

@@ -19,6 +19,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,8 +39,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -68,19 +75,19 @@ fun MeshDemoApp(
             state.isChoosingStation -> viewModel.cancelStationChange()
             state.step == DemoStep.RADIO_SELECTION -> viewModel.cancelRadioChange()
             state.step == DemoStep.RADIO_RECONNECT -> viewModel.returnToOperator()
-            state.step == DemoStep.COMPOSE || state.step == DemoStep.RESULT -> viewModel.returnToContacts()
+            state.step == DemoStep.COMPOSE -> viewModel.returnToContacts()
             else -> viewModel.returnHome()
         }
     }
     MaterialTheme {
         Surface(color = Navy, modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 24.dp, vertical = 28.dp),
-            ) {
-                if (state.stationRole == null || state.isChoosingStation) {
+            when {
+                state.stationRole == null || state.isChoosingStation -> Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp, vertical = 28.dp),
+                ) {
                     if (state.stationRole == null) {
                         Header(state)
                         Spacer(Modifier.height(26.dp))
@@ -89,9 +96,31 @@ fun MeshDemoApp(
                         Spacer(Modifier.height(22.dp))
                     }
                     StationSelectionScreen(state.stationRole, onSelectStation)
-                    return@Column
                 }
-                when (state.step) {
+
+                state.step == DemoStep.COMPOSE -> Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 20.dp, vertical = 20.dp),
+                ) {
+                    SubpageTopBar(state, viewModel::returnToContacts)
+                    Spacer(Modifier.height(14.dp))
+                    RecipientExperienceScreen(
+                        state = state,
+                        onDraftChanged = viewModel::updateDraft,
+                        onSend = viewModel::send,
+                        onOpenBitcoin = viewModel::openBitcoin,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                else -> Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp, vertical = 28.dp),
+                ) {
+                    when (state.step) {
                     DemoStep.HOME -> HomeScreen(
                         state = state,
                         onStart = viewModel::start,
@@ -107,11 +136,7 @@ fun MeshDemoApp(
                         Spacer(Modifier.height(22.dp))
                         ContactsScreen(state, viewModel::selectRecipient)
                     }
-                    DemoStep.COMPOSE -> {
-                        SubpageTopBar(state, viewModel::returnToContacts)
-                        Spacer(Modifier.height(22.dp))
-                        ComposeScreen(state, viewModel::updateDraft, viewModel::send)
-                    }
+                    DemoStep.COMPOSE -> Unit
                     DemoStep.BITCOIN -> {
                         SubpageTopBar(state, viewModel::returnHome)
                         Spacer(Modifier.height(22.dp))
@@ -120,16 +145,6 @@ fun MeshDemoApp(
                             onRelay = viewModel::relayNextBitcoinTransaction,
                             onReset = viewModel::resetBitcoinQueue,
                             onBack = viewModel::returnHome,
-                        )
-                    }
-                    DemoStep.RESULT -> {
-                        SubpageTopBar(state, viewModel::returnToContacts)
-                        Spacer(Modifier.height(22.dp))
-                        ResultScreen(
-                            state = state,
-                            onContinue = viewModel::continueConversation,
-                            onChooseContact = viewModel::returnToContacts,
-                            onHome = viewModel::startOver,
                         )
                     }
                     DemoStep.OPERATOR -> {
@@ -163,6 +178,7 @@ fun MeshDemoApp(
                         )
                     }
                 }
+            }
             }
         }
     }
@@ -970,21 +986,32 @@ private fun ContactsScreen(
     state: MeshDemoState,
     onSelectRecipient: (String) -> Unit,
 ) {
-    Text("Who do you want to reach?", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black)
+    Text("Choose how to use the mesh", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black)
     Spacer(Modifier.height(8.dp))
     Text(
-        "Choose one person for a direct message, send something to the Gateway, or deliberately broadcast to everyone.",
+        "Each path demonstrates a different kind of communication without relying on cellular service.",
         color = Muted,
         lineHeight = 22.sp,
     )
     Spacer(Modifier.height(22.dp))
-    state.recipients.filter { it.kind != RecipientKind.EVERYONE }.forEach { recipient ->
+
+    state.recipients.firstOrNull { it.kind == RecipientKind.PERSON }?.let { recipient ->
+        ExperienceLabel("PERSON TO PERSON", "A familiar conversation")
+        Spacer(Modifier.height(9.dp))
         RecipientCard(recipient, onSelectRecipient)
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(20.dp))
     }
-    Text("GROUP", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Black)
-    Spacer(Modifier.height(10.dp))
+
+    state.recipients.firstOrNull { it.kind == RecipientKind.GATEWAY }?.let { recipient ->
+        ExperienceLabel("GATEWAY SERVICES", "Reach the laptop and internet edge")
+        Spacer(Modifier.height(9.dp))
+        RecipientCard(recipient, onSelectRecipient)
+        Spacer(Modifier.height(20.dp))
+    }
+
     state.recipients.firstOrNull { it.kind == RecipientKind.EVERYONE }?.let { recipient ->
+        ExperienceLabel("MESH ANNOUNCEMENT", "One message for every listening node")
+        Spacer(Modifier.height(9.dp))
         RecipientCard(recipient, onSelectRecipient)
     }
     if (state.received.isNotEmpty()) {
@@ -1025,198 +1052,624 @@ private fun ContactsScreen(
 }
 
 @Composable
+private fun ExperienceLabel(title: String, description: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        Text(title, color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
+        Text(description, color = Muted, fontSize = 10.sp)
+    }
+}
+
+@Composable
 private fun RecipientCard(recipient: MeshRecipient, onSelectRecipient: (String) -> Unit) {
     val accent = when (recipient.kind) {
         RecipientKind.PERSON -> Cyan
         RecipientKind.GATEWAY -> BitcoinOrange
-        RecipientKind.EVERYONE -> Muted
+        RecipientKind.EVERYONE -> Danger
     }
-    OutlinedButton(
-        onClick = { onSelectRecipient(recipient.id) },
-        enabled = recipient.isAvailable,
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-        contentPadding = PaddingValues(16.dp),
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth(),
+    val experienceTitle = when (recipient.kind) {
+        RecipientKind.PERSON -> "MESSAGE ${recipient.displayName.uppercase()}"
+        RecipientKind.GATEWAY -> "USE GATEWAY"
+        RecipientKind.EVERYONE -> "BROADCAST TO EVERYONE"
+    }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = accent.copy(alpha = 0.09f)),
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, accent.copy(alpha = 0.42f), RoundedCornerShape(20.dp)),
     ) {
-        Row(
+        TextButton(
+            onClick = { onSelectRecipient(recipient.id) },
+            enabled = recipient.isAvailable,
+            colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+            contentPadding = PaddingValues(17.dp),
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier.size(42.dp).background(accent.copy(alpha = 0.18f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        when (recipient.kind) {
-                            RecipientKind.PERSON -> recipient.displayName.take(1)
-                            RecipientKind.GATEWAY -> "▣"
-                            RecipientKind.EVERYONE -> "◎"
-                        },
-                        color = accent,
-                        fontWeight = FontWeight.Black,
-                    )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier.size(48.dp).background(accent.copy(alpha = 0.18f), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            when (recipient.kind) {
+                                RecipientKind.PERSON -> recipient.displayName.take(1)
+                                RecipientKind.GATEWAY -> "▣"
+                                RecipientKind.EVERYONE -> "◎"
+                            },
+                            color = accent,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Black,
+                        )
+                    }
+                    Spacer(Modifier.width(13.dp))
+                    Column(modifier = Modifier.width(205.dp)) {
+                        Text(experienceTitle, fontSize = 15.sp, fontWeight = FontWeight.Black)
+                        Spacer(Modifier.height(2.dp))
+                        Text(recipient.description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                    }
                 }
-                Spacer(Modifier.width(13.dp))
-                Column(modifier = Modifier.width(205.dp)) {
-                    Text(recipient.displayName, fontSize = 17.sp, fontWeight = FontWeight.Black)
-                    Text(recipient.description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
-                }
+                Text(if (recipient.isAvailable) "›" else "…", color = accent, fontSize = 24.sp)
             }
-            Text(if (recipient.isAvailable) "›" else "…", color = accent, fontSize = 24.sp)
         }
     }
 }
 
+private data class ConversationLine(
+    val key: String,
+    val sender: String,
+    val text: String,
+    val outgoing: Boolean,
+    val recordedAtMs: Long,
+)
+
+private fun conversationLines(state: MeshDemoState, recipient: MeshRecipient): List<ConversationLine> {
+    val outgoing = state.sent
+        .filter {
+            if (recipient.isBroadcast) it.isBroadcast else !it.isBroadcast && it.recipientNodeNumber == recipient.nodeNumber
+        }
+        .map {
+            ConversationLine(
+                key = "sent-${it.packetId}",
+                sender = "You",
+                text = it.text,
+                outgoing = true,
+                recordedAtMs = it.recordedAtMs,
+            )
+        }
+    val incoming = state.received
+        .filter {
+            if (recipient.isBroadcast) it.isBroadcast else !it.isBroadcast && it.senderNodeNumber == recipient.nodeNumber
+        }
+        .map {
+            ConversationLine(
+                key = "received-${it.packetId}",
+                sender = it.sender,
+                text = it.text,
+                outgoing = false,
+                recordedAtMs = it.recordedAtMs,
+            )
+        }
+    return (outgoing + incoming).sortedBy(ConversationLine::recordedAtMs)
+}
+
 @Composable
-private fun ComposeScreen(
+private fun RecipientExperienceScreen(
     state: MeshDemoState,
     onDraftChanged: (String) -> Unit,
     onSend: () -> Unit,
+    onOpenBitcoin: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    when (state.selectedRecipient?.kind) {
+        RecipientKind.PERSON -> ConversationScreen(state, onDraftChanged, onSend, modifier)
+        RecipientKind.GATEWAY -> GatewayServicesScreen(state, onDraftChanged, onSend, onOpenBitcoin, modifier)
+        RecipientKind.EVERYONE -> BroadcastScreen(state, onDraftChanged, onSend, modifier)
+        null -> Unit
+    }
+}
+
+@Composable
+private fun ConversationScreen(
+    state: MeshDemoState,
+    onDraftChanged: (String) -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val recipient = state.selectedRecipient ?: return
-    Text("Message ${recipient.displayName}", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black)
-    Spacer(Modifier.height(8.dp))
-    Text(
-        if (recipient.isBroadcast) {
-            "Public conference broadcast · every node on the channel may read it."
-        } else {
-            "Directly addressed to ${recipient.displayName} across the Meshtastic network."
-        },
-        color = if (recipient.isBroadcast) BitcoinOrange else Muted,
-        lineHeight = 22.sp,
-    )
-    ConversationPreview(state, recipient)
-    Spacer(Modifier.height(24.dp))
-    OutlinedTextField(
-        value = state.draft,
-        onValueChange = onDraftChanged,
-        label = { Text("Message") },
-        supportingText = { Text("${state.draftBytes} / $MAX_TEXT_BYTES bytes") },
-        minLines = 4,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Color.White,
-            unfocusedTextColor = Color.White,
-            cursorColor = Cyan,
-            focusedBorderColor = Cyan,
-            unfocusedBorderColor = Muted,
-            focusedLabelColor = Cyan,
-            unfocusedLabelColor = Muted,
-            focusedSupportingTextColor = Muted,
-            unfocusedSupportingTextColor = Muted,
-            focusedContainerColor = Panel,
-            unfocusedContainerColor = Panel,
-        ),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Spacer(Modifier.height(24.dp))
-    PrimaryButton(
-        if (recipient.isBroadcast) "BROADCAST TO EVERYONE" else "SEND TO ${recipient.displayName.uppercase()}",
-        onSend,
-        state.canSend,
-    )
-}
+    val messages = conversationLines(state, recipient)
+    val listState = rememberLazyListState()
+    LaunchedEffect(messages.size, state.lastPacketId) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    }
 
-@Composable
-private fun ConversationPreview(state: MeshDemoState, recipient: MeshRecipient) {
-    val incoming = state.received.firstOrNull {
-        if (recipient.isBroadcast) it.isBroadcast else !it.isBroadcast && it.senderNodeNumber == recipient.nodeNumber
-    }
-    val outgoing = state.sent.firstOrNull {
-        if (recipient.isBroadcast) it.isBroadcast else !it.isBroadcast && it.recipientNodeNumber == recipient.nodeNumber
-    }
-    if (incoming == null && outgoing == null) return
-    Spacer(Modifier.height(20.dp))
-    Text("RECENT EXCHANGE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-    Spacer(Modifier.height(8.dp))
-    outgoing?.let {
-        MessageBubble(label = "YOU → ${it.recipient.uppercase()}", text = it.text, outgoing = true)
-    }
-    incoming?.let {
-        MessageBubble(label = if (it.isBroadcast) "${it.sender.uppercase()} → EVERYONE" else it.sender.uppercase(), text = it.text)
-    }
-}
-
-@Composable
-private fun MessageBubble(label: String, text: String, outgoing: Boolean = false) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = if (outgoing) Cyan.copy(alpha = 0.12f) else Panel),
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth().padding(bottom = 7.dp),
-    ) {
-        Column(Modifier.padding(13.dp)) {
-            Text(label, color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.height(4.dp))
-            Text(text, color = Color.White, fontSize = 15.sp)
-        }
-    }
-}
-
-@Composable
-private fun ResultScreen(
-    state: MeshDemoState,
-    onContinue: () -> Unit,
-    onChooseContact: () -> Unit,
-    onHome: () -> Unit,
-) {
-    val recipient = state.selectedRecipient
-    Text("Message journey", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
-    Spacer(Modifier.height(24.dp))
-    JourneyNode("THIS PHONE", state.stationName)
-    JourneyArrow("Bluetooth")
-    JourneyNode("MESHTASTIC RADIO", state.radioDisplayName)
-    JourneyArrow(if (recipient?.isBroadcast == true) "LoRa / public channel" else "LoRa / direct packet")
-    JourneyNode(
-        if (recipient?.isBroadcast == true) "EVERYONE" else recipient?.displayName?.uppercase() ?: "MESHTASTIC MESH",
-        if (recipient?.kind == RecipientKind.GATEWAY) "Laptop and conference display" else "Meshtastic destination",
-    )
-    Spacer(Modifier.height(24.dp))
-    Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(20.dp)) {
-            Text(state.sendStatusText.ifBlank { "Preparing message…" }, color = statusColor(state), fontWeight = FontWeight.Bold)
-            state.lastPacketId?.let { Text("Packet $it", color = Muted, fontSize = 13.sp) }
-            if (state.sendProgress == SendProgress.RELAYED_BY_MESH) {
-                Spacer(Modifier.height(8.dp))
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.size(44.dp).background(Cyan.copy(alpha = 0.18f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(recipient.displayName.take(1), color = Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(recipient.displayName, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Black)
                 Text(
-                    if (recipient?.isBroadcast == true) {
-                        "The mesh relayed this public broadcast; it does not identify every listener."
-                    } else {
-                        "The destination confirmed the direct packet journey."
-                    },
-                    color = Muted,
-                    fontSize = 13.sp,
+                    if (recipient.isAvailable) "Directly addressed conversation" else "Not currently visible on the mesh",
+                    color = if (recipient.isAvailable) Muted else Danger,
+                    fontSize = 12.sp,
                 )
             }
         }
-    }
-    Spacer(Modifier.height(28.dp))
-    val canNavigate = state.sendProgress !in setOf(SendProgress.QUEUED, SendProgress.SENT_TO_RADIO)
-    PrimaryButton("SEND ANOTHER MESSAGE", onContinue, canNavigate)
-    Spacer(Modifier.height(10.dp))
-    SecondaryButton("CHOOSE ANOTHER CONTACT", onChooseContact, canNavigate)
-    Spacer(Modifier.height(10.dp))
-    TextButton(onClick = onHome, enabled = canNavigate, modifier = Modifier.fillMaxWidth()) {
-        Text("BACK TO DEMOS", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Black)
-    }
-}
-
-@Composable
-private fun JourneyNode(title: String, detail: String) {
-    Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(title, color = Color.White, fontWeight = FontWeight.Bold)
-            Text(detail, color = Muted, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp))
+        MessageRouteCard(state, recipient)
+        Spacer(Modifier.height(10.dp))
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (messages.isEmpty()) {
+                item {
+                    Text(
+                        if (recipient.isBroadcast) {
+                            "Write the first public message to everyone on the conference channel."
+                        } else {
+                            "Start the conversation with ${recipient.displayName}."
+                        },
+                        color = Muted,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 26.dp),
+                    )
+                }
+            } else {
+                items(messages, key = ConversationLine::key) { message ->
+                    ConversationBubble(message)
+                }
+            }
+        }
+        SendStatusLine(state)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = state.draft,
+                onValueChange = onDraftChanged,
+                placeholder = { Text("Message ${recipient.displayName}") },
+                supportingText = { Text("${state.draftBytes} / $MAX_TEXT_BYTES bytes") },
+                minLines = 1,
+                maxLines = 4,
+                enabled = recipient.isAvailable,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    cursorColor = Cyan,
+                    focusedBorderColor = Cyan,
+                    unfocusedBorderColor = Muted,
+                    focusedPlaceholderColor = Muted,
+                    unfocusedPlaceholderColor = Muted,
+                    focusedSupportingTextColor = Muted,
+                    unfocusedSupportingTextColor = Muted,
+                    focusedContainerColor = Panel,
+                    unfocusedContainerColor = Panel,
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(10.dp))
+            Button(
+                onClick = onSend,
+                enabled = state.canSend,
+                colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Navy),
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                modifier = Modifier.width(74.dp).height(56.dp),
+            ) {
+                Text(if (recipient.isBroadcast) "POST" else "SEND", fontSize = 11.sp, fontWeight = FontWeight.Black)
+            }
         }
     }
 }
 
 @Composable
-private fun JourneyArrow(label: String) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("↓", color = Cyan, fontSize = 22.sp, textAlign = TextAlign.Center)
-        Text(label, color = Muted, fontSize = 12.sp)
+private fun GatewayServicesScreen(
+    state: MeshDemoState,
+    onDraftChanged: (String) -> Unit,
+    onSend: () -> Unit,
+    onOpenBitcoin: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val recipient = state.selectedRecipient ?: return
+    val messages = conversationLines(state, recipient)
+    val listState = rememberLazyListState()
+    LaunchedEffect(messages.size, state.lastPacketId) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        ExperienceHeader(
+            symbol = "▣",
+            title = "Gateway Services",
+            subtitle = if (recipient.isAvailable) "LoRa bridge online" else "Waiting for the laptop Gateway",
+            accent = BitcoinOrange,
+        )
+        Spacer(Modifier.height(12.dp))
+        MessageRouteCard(state, recipient)
+        Spacer(Modifier.height(10.dp))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = BitcoinOrange.copy(alpha = 0.10f)),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().border(
+                1.dp,
+                BitcoinOrange.copy(alpha = 0.35f),
+                RoundedCornerShape(14.dp),
+            ),
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Text("BIG SCREEN MESSAGE", color = BitcoinOrange, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Send a message to the laptop display. The Gateway is a service endpoint, not another person.",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+            }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (messages.isEmpty()) {
+                item {
+                    Text(
+                        "Gateway activity will appear here.",
+                        color = Muted,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
+                    )
+                }
+            } else {
+                items(messages, key = ConversationLine::key) { message ->
+                    GatewayActivityCard(message)
+                }
+            }
+        }
+        SendStatusLine(state)
+        OutlinedButton(
+            onClick = onOpenBitcoin,
+            enabled = state.isConnected && !state.isBitcoinRelayActive,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = BitcoinOrange),
+            modifier = Modifier.fillMaxWidth().height(44.dp),
+        ) {
+            Text("RELAY A SIGNED BITCOIN TRANSACTION  →", fontSize = 10.sp, fontWeight = FontWeight.Black)
+        }
+        Spacer(Modifier.height(8.dp))
+        MessageComposer(
+            state = state,
+            placeholder = "Message for the big screen",
+            actionLabel = "DISPLAY",
+            accent = BitcoinOrange,
+            onDraftChanged = onDraftChanged,
+            onAction = onSend,
+        )
+    }
+}
+
+@Composable
+private fun BroadcastScreen(
+    state: MeshDemoState,
+    onDraftChanged: (String) -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val recipient = state.selectedRecipient ?: return
+    val messages = conversationLines(state, recipient)
+    val listState = rememberLazyListState()
+    var reviewing by remember { mutableStateOf(false) }
+    LaunchedEffect(messages.size, state.lastPacketId) {
+        reviewing = false
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        ExperienceHeader(
+            symbol = "◎",
+            title = "Mesh Announcement",
+            subtitle = "One message for every listening node",
+            accent = Danger,
+        )
+        Spacer(Modifier.height(12.dp))
+        MessageRouteCard(state, recipient)
+        Spacer(Modifier.height(10.dp))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Danger.copy(alpha = 0.10f)),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().border(1.dp, Danger.copy(alpha = 0.42f), RoundedCornerShape(14.dp)),
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Text("VISIBLE TO EVERYONE", color = Danger, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Alice, Bob and the Gateway can receive this announcement. It is not a private conversation.",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+            }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (messages.isEmpty()) {
+                item {
+                    Text(
+                        "No public announcements yet.",
+                        color = Muted,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
+                    )
+                }
+            } else {
+                items(messages, key = ConversationLine::key) { message ->
+                    AnnouncementCard(message)
+                }
+            }
+        }
+        SendStatusLine(state)
+        if (reviewing) {
+            BroadcastReview(
+                text = state.draft,
+                canSend = state.canSend,
+                onCancel = { reviewing = false },
+                onConfirm = {
+                    reviewing = false
+                    onSend()
+                },
+            )
+        } else {
+            MessageComposer(
+                state = state,
+                placeholder = "Announcement to everyone",
+                actionLabel = "REVIEW",
+                accent = Danger,
+                onDraftChanged = onDraftChanged,
+                onAction = { reviewing = true },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ExperienceHeader(symbol: String, title: String, subtitle: String, accent: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier.size(46.dp).background(accent.copy(alpha = 0.18f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(symbol, color = accent, fontSize = 18.sp, fontWeight = FontWeight.Black)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(title, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Black)
+            Text(subtitle, color = Muted, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun GatewayActivityCard(message: ConversationLine) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        shape = RoundedCornerShape(13.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Box(
+                Modifier.size(8.dp).background(if (message.outgoing) BitcoinOrange else Cyan, CircleShape),
+            )
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text(
+                    if (message.outgoing) "SENT TO LAPTOP DISPLAY" else "GATEWAY RESPONSE",
+                    color = if (message.outgoing) BitcoinOrange else Cyan,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(message.text, color = Color.White, fontSize = 14.sp, lineHeight = 19.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnnouncementCard(message: ConversationLine) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Danger.copy(alpha = if (message.outgoing) 0.12f else 0.07f)),
+        shape = RoundedCornerShape(13.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+            Text(
+                if (message.outgoing) "YOU · EVERYONE" else "${message.sender.uppercase()} · EVERYONE",
+                color = Danger,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Black,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(message.text, color = Color.White, fontSize = 14.sp, lineHeight = 19.sp)
+        }
+    }
+}
+
+@Composable
+private fun SendStatusLine(state: MeshDemoState) {
+    if (state.sendProgress == SendProgress.IDLE || state.sendStatusText.isBlank()) return
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(8.dp).background(statusColor(state), CircleShape))
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(state.sendStatusText, color = statusColor(state), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            state.lastPacketId?.let { Text("Mesh packet $it", color = Muted, fontSize = 10.sp) }
+        }
+    }
+}
+
+@Composable
+private fun MessageComposer(
+    state: MeshDemoState,
+    placeholder: String,
+    actionLabel: String,
+    accent: Color,
+    onDraftChanged: (String) -> Unit,
+    onAction: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = state.draft,
+            onValueChange = onDraftChanged,
+            placeholder = { Text(placeholder) },
+            supportingText = { Text("${state.draftBytes} / $MAX_TEXT_BYTES bytes") },
+            minLines = 1,
+            maxLines = 4,
+            enabled = state.selectedRecipient?.isAvailable == true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                cursorColor = accent,
+                focusedBorderColor = accent,
+                unfocusedBorderColor = Muted,
+                focusedPlaceholderColor = Muted,
+                unfocusedPlaceholderColor = Muted,
+                focusedSupportingTextColor = Muted,
+                unfocusedSupportingTextColor = Muted,
+                focusedContainerColor = Panel,
+                unfocusedContainerColor = Panel,
+            ),
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(10.dp))
+        Button(
+            onClick = onAction,
+            enabled = state.canSend,
+            colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Navy),
+            contentPadding = PaddingValues(horizontal = 8.dp),
+            modifier = Modifier.width(78.dp).height(56.dp),
+        ) {
+            Text(actionLabel, fontSize = 10.sp, fontWeight = FontWeight.Black)
+        }
+    }
+}
+
+@Composable
+private fun BroadcastReview(
+    text: String,
+    canSend: Boolean,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Danger.copy(alpha = 0.12f)),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().border(1.dp, Danger.copy(alpha = 0.45f), RoundedCornerShape(14.dp)),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("REVIEW PUBLIC ANNOUNCEMENT", color = Danger, fontSize = 10.sp, fontWeight = FontWeight.Black)
+            Spacer(Modifier.height(6.dp))
+            Text("“$text”", color = Color.White, fontSize = 14.sp, lineHeight = 19.sp)
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
+                    Text("EDIT", fontSize = 10.sp, fontWeight = FontWeight.Black)
+                }
+                Button(
+                    onClick = onConfirm,
+                    enabled = canSend,
+                    colors = ButtonDefaults.buttonColors(containerColor = Danger, contentColor = Navy),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("BROADCAST", fontSize = 10.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageRouteCard(state: MeshDemoState, recipient: MeshRecipient) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Panel.copy(alpha = 0.76f)),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text("HOW IT TRAVELS", color = Cyan, fontSize = 9.sp, fontWeight = FontWeight.Black)
+            Spacer(Modifier.height(3.dp))
+            Text(
+                "${state.stationName} phone  →  Bluetooth  →  ${state.radioDisplayName}",
+                color = Color.White,
+                fontSize = 11.sp,
+            )
+            Text(
+                when (recipient.kind) {
+                    RecipientKind.PERSON -> "LoRa addressed packet  →  ${recipient.displayName}"
+                    RecipientKind.GATEWAY -> "LoRa addressed packet  →  Gateway  →  Laptop"
+                    RecipientKind.EVERYONE -> "LoRa primary channel  →  Every listening node"
+                },
+                color = when (recipient.kind) {
+                    RecipientKind.PERSON -> Muted
+                    RecipientKind.GATEWAY -> BitcoinOrange
+                    RecipientKind.EVERYONE -> Danger
+                },
+                fontSize = 11.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConversationBubble(message: ConversationLine) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start,
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (message.outgoing) Cyan.copy(alpha = 0.16f) else Panel,
+            ),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth(0.82f),
+        ) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                Text(message.sender.uppercase(), color = Cyan, fontSize = 9.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.height(3.dp))
+                Text(message.text, color = Color.White, fontSize = 15.sp, lineHeight = 20.sp)
+            }
+        }
     }
 }
 

@@ -32,8 +32,9 @@ NODE_NAMES = {
 BITCOIN_REPLY_INTERVAL_SECONDS = 3.0
 PRESENCE_PREFIX = "DEMO_PRESENCE"
 PRESENCE_REQUEST = "DEMO_PRESENCE_REQUEST|1"
-PRESENCE_INTERVAL_SECONDS = 60.0
-PRESENCE_INITIAL_DELAYS_SECONDS = (0.0, 2.0, 3.0)
+PRESENCE_INTERVAL_SECONDS = 5 * 60.0
+PRESENCE_INITIAL_DELAYS_SECONDS = (1.0,)
+PRESENCE_REQUEST_RESPONSE_DELAY_SECONDS = 3.0
 
 
 def presence_announcement(identity: str, session: str) -> str:
@@ -198,7 +199,11 @@ class MeshtasticAdapter(threading.Thread):
             from meshtastic.serial_interface import SerialInterface
 
             pub.subscribe(self._on_text, "meshtastic.receive.text")
-            self.interface = SerialInterface(devPath=self.port)
+            # ESP32-S3 firmware can corrupt serial protobuf frames while replaying a
+            # full NodeDB during host startup. Conference identities are learned from
+            # lightweight presence frames, so the collector deliberately skips that
+            # unnecessary replay and keeps the live serial stream reliable.
+            self.interface = SerialInterface(devPath=self.port, noNodes=True)
             threading.Thread(
                 target=self._transaction_reply_loop,
                 name="meshtastic-bitcoin-replies",
@@ -299,9 +304,11 @@ class MeshtasticAdapter(threading.Thread):
                     return
                 self._send_gateway_presence()
             while not self.stop_event.is_set():
-                self._presence_wakeup.wait(PRESENCE_INTERVAL_SECONDS)
+                requested = self._presence_wakeup.wait(PRESENCE_INTERVAL_SECONDS)
                 self._presence_wakeup.clear()
                 if self.stop_event.is_set():
+                    return
+                if requested and self.stop_event.wait(PRESENCE_REQUEST_RESPONSE_DELAY_SECONDS):
                     return
                 self._send_gateway_presence()
         except Exception as error:
