@@ -63,6 +63,17 @@ class MeshDemoModelsTest {
     }
 
     @Test
+    fun operatorChangeRadio_neverAutomaticallyReselectsTheOnlyPairedRadio() {
+        val current = DiscoveredRadio("AA:BB:CC:DD:EE:01", "Meshtastic current", -42, isBonded = true)
+
+        assertEquals(
+            null,
+            singlePairedRadio(listOf(current), allowAutomaticSelection = false),
+        )
+        assertEquals(current, singlePairedRadio(listOf(current), allowAutomaticSelection = true))
+    }
+
+    @Test
     fun unpairedRadios_areNeverAutomaticallySelected() {
         val radio = DiscoveredRadio("AA:BB:CC:DD:EE:01", "LT1", -40, isBonded = false)
 
@@ -72,9 +83,11 @@ class MeshDemoModelsTest {
 
     @Test
     fun sendIsEnabledOnlyForConnectedValidDraft() {
+        val bob = MeshRecipient("bravo", 42, "Bob", "Direct message", RecipientKind.PERSON, true)
         val connected = MeshDemoState(
             stationRole = StationRole.ALPHA,
             radioStatus = RadioStatus.CONNECTED,
+            selectedRecipient = bob,
             draft = "CODEX TEST",
         )
 
@@ -82,6 +95,7 @@ class MeshDemoModelsTest {
         assertFalse(connected.copy(radioStatus = RadioStatus.DISCONNECTED).canSend)
         assertFalse(connected.copy(draft = " ").canSend)
         assertFalse(connected.copy(sendProgress = SendProgress.QUEUED).canSend)
+        assertFalse(connected.copy(selectedRecipient = bob.copy(isAvailable = false)).canSend)
     }
 
     @Test
@@ -141,6 +155,8 @@ class MeshDemoModelsTest {
         assertEquals(StationRole.BRAVO, StationRole.fromStorageId("bravo"))
         assertEquals(null, StationRole.fromStorageId("unknown"))
         assertFalse(StationRole.ALPHA.transactionAssetName == StationRole.BRAVO.transactionAssetName)
+        assertEquals("Alice", StationRole.ALPHA.stationName)
+        assertEquals("Bob", StationRole.BRAVO.stationName)
         assertEquals("next_transaction_alpha", nextTransactionPreferenceKey(StationRole.ALPHA))
         assertEquals("next_transaction_bravo", nextTransactionPreferenceKey(StationRole.BRAVO))
     }
@@ -156,5 +172,124 @@ class MeshDemoModelsTest {
 
         assertFalse(unconfigured.canSend)
         assertFalse(unconfigured.canRelayBitcoin)
+    }
+
+    @Test
+    fun aliceContacts_prioritizeBobThenGatewayAndKeepBroadcastSeparate() {
+        val contacts = conferenceRecipients(
+            StationRole.ALPHA,
+            listOf(
+                KnownMeshNode(21, "MESH-BRAVO"),
+                KnownMeshNode(LAPTOP_NODE_NUMBER, "Laptop Gateway"),
+            ),
+        )
+
+        assertEquals(listOf("Bob", "Gateway", "Everyone"), contacts.map(MeshRecipient::displayName))
+        assertEquals(21, contacts[0].nodeNumber)
+        assertTrue(contacts[0].isAvailable)
+        assertEquals(LAPTOP_NODE_NUMBER, contacts[1].nodeNumber)
+        assertTrue(contacts[2].isBroadcast)
+        assertEquals(null, contacts[2].nodeNumber)
+    }
+
+    @Test
+    fun bobContacts_recognizeAliceAndUnavailablePeerCannotBeSelectedForSend() {
+        val available = conferenceRecipients(
+            StationRole.BRAVO,
+            listOf(KnownMeshNode(11, "Alice")),
+        )
+        val unavailable = conferenceRecipients(StationRole.BRAVO, emptyList())
+
+        assertEquals("Alice", available.first().displayName)
+        assertEquals(11, available.first().nodeNumber)
+        assertTrue(available.first().isAvailable)
+        assertFalse(unavailable.first().isAvailable)
+        assertTrue(unavailable[1].isAvailable)
+    }
+
+    @Test
+    fun participantNames_mapLegacyConferenceNamesToVisitorNames() {
+        assertEquals("Alice", participantName(11, "MESH-ALPHA"))
+        assertEquals("Bob", participantName(12, "Bravo"))
+        assertEquals("Gateway", participantName(LAPTOP_NODE_NUMBER, "anything"))
+        assertEquals("Field node", participantName(13, "Field node"))
+    }
+
+    @Test
+    fun genericRadioNames_useOwnNodeToFindTheOtherConferenceParticipant() {
+        val aliceNode = KnownMeshNode(11, "Meshtastic 2554")
+        val bobNode = KnownMeshNode(12, "Meshtastic e8e8")
+        val gatewayNode = KnownMeshNode(LAPTOP_NODE_NUMBER, "Meshtastic a141")
+
+        val aliceContacts = conferenceRecipients(
+            role = StationRole.ALPHA,
+            nodes = listOf(aliceNode, bobNode, gatewayNode),
+            ownNodeNumber = aliceNode.nodeNumber,
+        )
+        val bobContacts = conferenceRecipients(
+            role = StationRole.BRAVO,
+            nodes = listOf(aliceNode, bobNode, gatewayNode),
+            ownNodeNumber = bobNode.nodeNumber,
+        )
+
+        assertEquals(bobNode.nodeNumber, aliceContacts.first().nodeNumber)
+        assertEquals("Bob", aliceContacts.first().displayName)
+        assertTrue(aliceContacts.first().isAvailable)
+        assertEquals(aliceNode.nodeNumber, bobContacts.first().nodeNumber)
+        assertEquals("Alice", bobContacts.first().displayName)
+        assertTrue(bobContacts.first().isAvailable)
+    }
+
+    @Test
+    fun presenceFrames_roundTripAndRejectUnknownProtocolValues() {
+        val frame = presenceAnnouncementFrame(ConferenceIdentity.ALICE, "alice_session")
+
+        assertEquals(
+            PresenceFrame.Announcement(ConferenceIdentity.ALICE, "alice_session"),
+            parsePresenceFrame(frame),
+        )
+        assertEquals(PresenceFrame.Request, parsePresenceFrame(PRESENCE_REQUEST))
+        assertEquals(null, parsePresenceFrame("DEMO_PRESENCE|2|ALICE|session"))
+        assertEquals(null, parsePresenceFrame("DEMO_PRESENCE|1|UNKNOWN|session"))
+        assertEquals(null, parsePresenceFrame("ordinary visitor message"))
+    }
+
+    @Test
+    fun freshPresenceOverridesRadioNamesAndFollowsThePhoneIdentity() {
+        val now = 1_000_000L
+        val aliceRadio = KnownMeshNode(11, "Meshtastic 2554")
+        val bobRadio = KnownMeshNode(12, "Meshtastic e8e8")
+        val presences = listOf(
+            StationPresence(ConferenceIdentity.ALICE, bobRadio.nodeNumber, "alice-phone", now),
+            StationPresence(ConferenceIdentity.BOB, aliceRadio.nodeNumber, "bob-phone", now),
+            StationPresence(ConferenceIdentity.GATEWAY, 13, "laptop", now),
+        )
+
+        val aliceContacts = conferenceRecipients(
+            role = StationRole.ALPHA,
+            nodes = listOf(aliceRadio, bobRadio),
+            ownNodeNumber = bobRadio.nodeNumber,
+            presences = presences,
+            nowMs = now,
+        )
+
+        assertEquals(aliceRadio.nodeNumber, aliceContacts[0].nodeNumber)
+        assertEquals(13, aliceContacts[1].nodeNumber)
+        assertEquals("Bob", presenceName(aliceRadio.nodeNumber, presences, now))
+        assertEquals("Alice", presenceName(bobRadio.nodeNumber, presences, now))
+    }
+
+    @Test
+    fun stalePresenceExpiresAndDuplicateIdentityIsReportedAsConflict() {
+        val now = PRESENCE_TTL_MS + 10_000L
+        val presences = listOf(
+            StationPresence(ConferenceIdentity.ALICE, 11, "old", 1L),
+            StationPresence(ConferenceIdentity.BOB, 12, "bob-one", now),
+            StationPresence(ConferenceIdentity.BOB, 13, "bob-two", now - 1),
+        )
+
+        assertEquals(null, latestPresence(ConferenceIdentity.ALICE, presences, now))
+        assertEquals(12, latestPresence(ConferenceIdentity.BOB, presences, now)?.nodeNumber)
+        assertEquals(setOf(ConferenceIdentity.BOB), presenceConflicts(presences, now))
     }
 }

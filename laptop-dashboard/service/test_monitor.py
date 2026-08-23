@@ -1,9 +1,68 @@
 import unittest
+import threading
 
-from monitor import MessageHub
+from monitor import (
+    MeshtasticAdapter,
+    MessageHub,
+    UnavailableBitcoinRpc,
+    parse_presence_announcement,
+    presence_announcement,
+)
 
 
 class MessageHubTest(unittest.TestCase):
+    def test_presence_frames_are_strict_and_round_trip(self):
+        frame = presence_announcement("GATEWAY", "session_123")
+        self.assertEqual(("GATEWAY", "session_123"), parse_presence_announcement(frame))
+        self.assertIsNone(parse_presence_announcement("DEMO_PRESENCE|1|MALLORY|session"))
+        self.assertIsNone(parse_presence_announcement("DEMO_PRESENCE|2|ALICE|session"))
+
+    def test_presence_is_hidden_and_labels_follow_the_latest_app_identity(self):
+        hub = MessageHub()
+        adapter = MeshtasticAdapter(
+            hub,
+            "/dev/test",
+            threading.Event(),
+            UnavailableBitcoinRpc("test"),
+        )
+        try:
+            adapter._on_text(
+                {
+                    "id": 1,
+                    "fromId": "!radio-one",
+                    "decoded": {"text": "DEMO_PRESENCE|1|ALICE|alice-phone"},
+                }
+            )
+            self.assertEqual([], hub.snapshot()["messages"])
+
+            adapter._on_text(
+                {
+                    "id": 2,
+                    "fromId": "!radio-one",
+                    "decoded": {"text": "Hello from the mesh"},
+                }
+            )
+            message = hub.snapshot()["messages"][0]
+            self.assertEqual("Alice", message["sender"])
+
+            adapter._on_text(
+                {
+                    "id": 3,
+                    "fromId": "!radio-two",
+                    "decoded": {"text": "DEMO_PRESENCE|1|ALICE|alice-phone"},
+                }
+            )
+            adapter._on_text(
+                {
+                    "id": 4,
+                    "fromId": "!radio-one",
+                    "decoded": {"text": "Old radio"},
+                }
+            )
+            self.assertEqual("!radio-one", hub.snapshot()["messages"][-1]["sender"])
+        finally:
+            adapter.transaction_bridge.close()
+
     def test_deduplicates_messages_by_transport_id(self):
         hub = MessageHub()
         hub.add_message({"id": "meshtastic-1", "transport": "meshtastic", "text": "one"})

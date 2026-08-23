@@ -21,16 +21,27 @@ class MeshDemoViewModel(application: Application) : AndroidViewModel(application
 
     fun changeStation() {
         if (uiState.value.isBitcoinRelayActive) return
-        demoApplication.clearStationRole()
-        withSession { clearStation() }
+        withSession { beginStationSelection() }
     }
+
+    fun cancelStationChange() = withSession { cancelStationSelection() }
 
     fun selectRadio(address: String) = withSession { selectRadio(address) }
     fun scanRadios() = withSession { scanAgain() }
     fun changeRadio() = withSession { changeRadio() }
+    fun cancelRadioChange() = withSession { cancelRadioChange() }
     fun permissionRequired() = demoApplication.markPermissionRequired()
     fun updateDraft(value: String) = withSession { updateDraft(value) }
     fun start() = withSession { start() }
+    fun selectRecipient(id: String) = withSession { selectRecipient(id) }
+    fun returnToContacts() = withSession { returnToContacts() }
+    fun continueConversation() = withSession { continueConversation() }
+    fun openOperator() = withSession { openOperator() }
+    fun returnToOperator() = withSession { returnToOperator() }
+    fun refreshPresence() = withSession { refreshPresence() }
+    fun reconnectRadio() = withSession { reconnectRadio() }
+    fun openBitcoin() = withSession { openBitcoin() }
+    fun returnHome() = withSession { returnHome() }
     fun send() = withSession { send() }
     fun startOver() = withSession { startOver() }
     fun relayNextBitcoinTransaction() = withSession { relayNextBitcoinTransaction() }

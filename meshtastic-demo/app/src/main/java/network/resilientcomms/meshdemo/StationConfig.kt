@@ -11,14 +11,14 @@ enum class StationRole(
 ) {
     ALPHA(
         storageId = "alpha",
-        stationName = "MESH-ALPHA",
-        radioFallbackName = "Alpha radio",
+        stationName = "Alice",
+        radioFallbackName = "Alice's radio",
         transactionAssetName = "regtest_transactions_alpha.txt",
     ),
     BRAVO(
         storageId = "bravo",
-        stationName = "MESH-BRAVO",
-        radioFallbackName = "Bravo radio",
+        stationName = "Bob",
+        radioFallbackName = "Bob's radio",
         transactionAssetName = "regtest_transactions_bravo.txt",
     ),
     ;

@@ -27,11 +27,35 @@ from transaction_bridge import (
 
 
 NODE_NAMES = {
-    "!db5ee8e8": "Alpha",
-    "!d483063c": "Bravo",
-    "!2303a141": "Laptop",
+    "!2303a141": "Gateway",
 }
 BITCOIN_REPLY_INTERVAL_SECONDS = 3.0
+PRESENCE_PREFIX = "DEMO_PRESENCE"
+PRESENCE_REQUEST = "DEMO_PRESENCE_REQUEST|1"
+PRESENCE_INTERVAL_SECONDS = 60.0
+PRESENCE_INITIAL_DELAYS_SECONDS = (0.0, 2.0, 3.0)
+
+
+def presence_announcement(identity: str, session: str) -> str:
+    if identity not in {"ALICE", "BOB", "GATEWAY"}:
+        raise ValueError("Unknown conference identity")
+    if not session or len(session) > 24 or not all(
+        character.isalnum() or character in "_-" for character in session
+    ):
+        raise ValueError("Invalid presence session")
+    return f"{PRESENCE_PREFIX}|1|{identity}|{session}"
+
+
+def parse_presence_announcement(text: str) -> tuple[str, str] | None:
+    parts = text.strip().split("|")
+    if len(parts) != 4 or parts[0] != PRESENCE_PREFIX or parts[1] != "1":
+        return None
+    identity, session = parts[2], parts[3]
+    try:
+        presence_announcement(identity, session)
+    except ValueError:
+        return None
+    return identity, session
 
 
 def utc_now() -> str:
@@ -155,6 +179,11 @@ class MeshtasticAdapter(threading.Thread):
         self.port = port
         self.stop_event = stop_event
         self.interface: Any = None
+        self._send_lock = threading.Lock()
+        self._presence_wakeup = threading.Event()
+        self._presence_session = uuid.uuid4().hex[:12]
+        self._presence_names: dict[str, str] = {}
+        self._presence_source_by_identity: dict[str, str] = {}
         self._transaction_replies: queue.Queue[tuple[str, str, int]] = queue.Queue()
         self.transaction_bridge = BitcoinTransactionBridge(
             hub, bitcoin_rpc, self._send_transaction_reply
@@ -173,6 +202,11 @@ class MeshtasticAdapter(threading.Thread):
             threading.Thread(
                 target=self._transaction_reply_loop,
                 name="meshtastic-bitcoin-replies",
+                daemon=True,
+            ).start()
+            threading.Thread(
+                target=self._presence_loop,
+                name="meshtastic-gateway-presence",
                 daemon=True,
             ).start()
             node_count = len(getattr(self.interface, "nodes", {}) or {})
@@ -204,10 +238,20 @@ class MeshtasticAdapter(threading.Thread):
             text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else str(payload)
 
         source = packet.get("fromId") or f"!{packet.get('from', 0):08x}"
-        sender = NODE_NAMES.get(source, source)
+        text = str(text)
+        if text == PRESENCE_REQUEST:
+            self._presence_wakeup.set()
+            return
+        presence = parse_presence_announcement(text)
+        if presence is not None:
+            identity, _session = presence
+            self._record_presence(source, identity)
+            return
+
+        sender = self._presence_names.get(source) or NODE_NAMES.get(source, source)
         channel = packet.get("channel", 0)
         if self.transaction_bridge.handle_text(
-            str(text), source, sender, channel if isinstance(channel, int) else 0
+            text, source, sender, channel if isinstance(channel, int) else 0
         ):
             return
         hop_start = packet.get("hopStart")
@@ -219,7 +263,7 @@ class MeshtasticAdapter(threading.Thread):
                 "transport": "meshtastic",
                 "sender": sender,
                 "sourceId": source,
-                "text": str(text),
+                "text": text,
                 "rssi": packet.get("rxRssi"),
                 "snr": packet.get("rxSnr"),
                 "hops": hops,
@@ -228,6 +272,40 @@ class MeshtasticAdapter(threading.Thread):
 
     def _send_transaction_reply(self, text: str, destination: str, channel: int) -> None:
         self._transaction_replies.put((text, destination, channel))
+
+    def _record_presence(self, source: str, identity: str) -> None:
+        display_name = identity.title()
+        previous_source = self._presence_source_by_identity.get(identity)
+        if previous_source is not None and previous_source != source:
+            self._presence_names.pop(previous_source, None)
+        previous_identity = self._presence_names.get(source)
+        if previous_identity is not None and previous_identity.upper() != identity:
+            self._presence_source_by_identity.pop(previous_identity.upper(), None)
+        self._presence_source_by_identity[identity] = source
+        self._presence_names[source] = display_name
+
+    def _send_gateway_presence(self) -> None:
+        if self.interface is None:
+            return
+        frame = presence_announcement("GATEWAY", self._presence_session)
+        with self._send_lock:
+            self.interface.sendText(frame, channelIndex=0)
+        print(f"Gateway presence: {frame}", flush=True)
+
+    def _presence_loop(self) -> None:
+        try:
+            for delay_seconds in PRESENCE_INITIAL_DELAYS_SECONDS:
+                if self.stop_event.wait(delay_seconds):
+                    return
+                self._send_gateway_presence()
+            while not self.stop_event.is_set():
+                self._presence_wakeup.wait(PRESENCE_INTERVAL_SECONDS)
+                self._presence_wakeup.clear()
+                if self.stop_event.is_set():
+                    return
+                self._send_gateway_presence()
+        except Exception as error:
+            print(f"Gateway presence failed: {error}", flush=True)
 
     def _transaction_reply_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -241,7 +319,8 @@ class MeshtasticAdapter(threading.Thread):
                 # Direct-addressed application messages are not reliable in this
                 # three-node demo. Broadcast the session-specific reply on the
                 # proven primary-channel path.
-                self.interface.sendText(text, channelIndex=channel)
+                with self._send_lock:
+                    self.interface.sendText(text, channelIndex=channel)
                 print(f"Bitcoin gateway reply for {destination}: {text}", flush=True)
             except Exception as error:
                 print(

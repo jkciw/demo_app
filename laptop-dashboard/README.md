@@ -28,6 +28,12 @@ MESHTASTIC_PORT=/dev/cu.usbmodem1201 ./dashboardctl start
 Only one application can own a serial device at a time. Stop the Meshtastic
 CLI listener before starting the dashboard.
 
+While the collector is running, the serial node announces itself as **Gateway** using the same
+lightweight `DEMO_PRESENCE` protocol as the Alice and Bob phone apps. It also responds to a phone's
+presence refresh request. These control frames are consumed by the collector and never appear in
+the public message list; incoming phone messages are labelled from the most recent app presence,
+not from a hard-coded LilyGo node ID.
+
 ## Add the Reticulum RNode
 
 Connect the second USB radio, find its `/dev/cu.*` path, and start with:

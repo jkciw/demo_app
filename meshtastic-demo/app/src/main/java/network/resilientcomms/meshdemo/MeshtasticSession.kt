@@ -65,13 +65,21 @@ class MeshtasticSession(
 
     private val connectionMutex = Mutex()
     private val observerJobs = mutableListOf<Job>()
-    private val nodeNames = mutableMapOf<Int, String>()
+    private val knownNodes = mutableMapOf<Int, KnownMeshNode>()
+    private var ownNodeNumber: Int? = null
+    private val presenceSession = System.currentTimeMillis().toString(36).takeLast(12)
+    private var presenceJob: Job? = null
+    private var presenceRequestJob: Job? = null
     private val bitcoinReplies = MutableSharedFlow<BitcoinReply>(replay = 32, extraBufferCapacity = 32)
     private var client: RadioClient? = null
     private var bitcoinRelayJob: Job? = null
     private var connectJob: Job? = null
     private var discoveryJob: Job? = null
     private var recoveryJob: Job? = null
+    private var radioChangeJob: Job? = null
+    private var requireExplicitRadioSelection = false
+    private var radioSelectionPreviousAddress: String? = null
+    private var radioSelectionPreviousName: String? = null
     private var desiredRadioAddress: String? = null
     private var desiredRadioName: String? = null
 
@@ -93,14 +101,25 @@ class MeshtasticSession(
 
     fun selectStation(role: StationRole) {
         if (_state.value.isBitcoinRelayActive) return
+        val returnStep = if (_state.value.step == DemoStep.OPERATOR) DemoStep.OPERATOR else DemoStep.HOME
         val transactions = signedTransactionsByRole[role].orEmpty()
         val queueIndex = preferences
             .getInt(nextTransactionPreferenceKey(role), 0)
             .coerceIn(0, transactions.size)
         _state.update {
+            val presences = it.presences.filterNot { presence -> presence.session == presenceSession }
             it.copy(
                 stationRole = role,
-                step = DemoStep.HOME,
+                isChoosingStation = false,
+                step = returnStep,
+                presences = presences,
+                recipients = conferenceRecipients(
+                    role = role,
+                    nodes = knownNodes.values,
+                    ownNodeNumber = ownNodeNumber,
+                    presences = presences,
+                ),
+                selectedRecipient = null,
                 bitcoinQueueIndex = queueIndex,
                 bitcoinQueueTotal = transactions.size,
                 bitcoinRelayProgress = BitcoinRelayProgress.IDLE,
@@ -116,6 +135,19 @@ class MeshtasticSession(
                 bitcoinBlockHeight = null,
             )
         }
+        client?.takeIf { _state.value.isConnected }?.let { radioClient ->
+            stopPresenceLoop()
+            startPresenceLoop(radioClient)
+        }
+    }
+
+    fun beginStationSelection() {
+        if (_state.value.isBitcoinRelayActive) return
+        _state.update { it.copy(isChoosingStation = true) }
+    }
+
+    fun cancelStationSelection() {
+        _state.update { it.copy(isChoosingStation = false) }
     }
 
     fun clearStation() {
@@ -123,6 +155,7 @@ class MeshtasticSession(
         _state.update {
             it.copy(
                 stationRole = null,
+                isChoosingStation = false,
                 step = DemoStep.HOME,
                 bitcoinQueueIndex = 0,
                 bitcoinQueueTotal = 0,
@@ -139,34 +172,38 @@ class MeshtasticSession(
 
     fun selectRadio(address: String) {
         val radio = _state.value.discoveredRadios.firstOrNull { it.address == address && it.isBonded } ?: return
+        val returnToOperator = _state.value.step == DemoStep.RADIO_SELECTION
         discoveryJob?.cancel()
         discoveryJob = null
+        radioChangeJob = null
+        requireExplicitRadioSelection = false
+        radioSelectionPreviousAddress = null
+        radioSelectionPreviousName = null
+        if (returnToOperator) _state.update { it.copy(step = DemoStep.OPERATOR) }
         saveSelectedRadio(radio)
         connectRadio(radio.address, radio.displayName)
     }
 
     fun changeRadio() {
-        scope.launch {
+        radioChangeJob?.cancel()
+        radioChangeJob = scope.launch {
             Log.i(TAG, "Change radio requested; current=${_state.value.selectedRadioAddress}")
             discoveryJob?.cancel()
             discoveryJob = null
+            radioSelectionPreviousAddress = _state.value.selectedRadioAddress
+            radioSelectionPreviousName = _state.value.selectedRadioName
             desiredRadioAddress = null
             desiredRadioName = null
+            requireExplicitRadioSelection = true
             connectJob?.cancel()
             connectJob = null
             recoveryJob?.cancel()
             recoveryJob = null
-            preferences.edit()
-                .remove(SELECTED_RADIO_ADDRESS_KEY)
-                .remove(SELECTED_RADIO_NAME_KEY)
-                .apply()
             _state.update {
                 it.copy(
-                    step = DemoStep.HOME,
+                    step = DemoStep.RADIO_SELECTION,
                     radioStatus = RadioStatus.SCANNING,
                     statusText = "Switching radio…",
-                    selectedRadioAddress = null,
-                    selectedRadioName = null,
                     discoveredRadios = emptyList(),
                 )
             }
@@ -174,6 +211,34 @@ class MeshtasticSession(
                 disconnectLocked()
             }
             discoverRadios()
+        }
+    }
+
+    fun cancelRadioChange() {
+        if (_state.value.step != DemoStep.RADIO_SELECTION) return
+        val previousAddress = radioSelectionPreviousAddress
+        val previousName = radioSelectionPreviousName
+        radioChangeJob?.cancel()
+        radioChangeJob = null
+        discoveryJob?.cancel()
+        discoveryJob = null
+        requireExplicitRadioSelection = false
+        radioSelectionPreviousAddress = null
+        radioSelectionPreviousName = null
+        _state.update {
+            it.copy(
+                step = DemoStep.OPERATOR,
+                discoveredRadios = emptyList(),
+                radioStatus = RadioStatus.DISCONNECTED,
+                statusText = if (previousAddress != null) {
+                    "Restoring ${previousName ?: "attached radio"}…"
+                } else {
+                    "No radio selected"
+                },
+            )
+        }
+        if (previousAddress != null && isBluetoothAddress(previousAddress)) {
+            connectRadio(previousAddress, previousName)
         }
     }
 
@@ -198,14 +263,14 @@ class MeshtasticSession(
             // Keep progress visible long enough to acknowledge the participant's tap.
             delay(BLE_SCAN_FEEDBACK_MS)
             when {
-                bonded.size == 1 -> {
+                bonded.size == 1 && !requireExplicitRadioSelection -> {
                     val radio = bonded.single()
                     discoveryJob = null
                     saveSelectedRadio(radio)
                     connectRadio(radio.address, radio.displayName)
                     return@launch
                 }
-                bonded.size > 1 -> {
+                bonded.isNotEmpty() -> {
                     discoveryJob = null
                     _state.update {
                         it.copy(
@@ -266,7 +331,10 @@ class MeshtasticSession(
 
             val radios = discovered.values.toList()
             val paired = pairedRadios(radios)
-            val automatic = singlePairedRadio(radios)
+            val automatic = singlePairedRadio(
+                radios = radios,
+                allowAutomaticSelection = !requireExplicitRadioSelection,
+            )
             if (automatic != null) {
                 saveSelectedRadio(automatic)
                 connectRadio(automatic.address, automatic.displayName)
@@ -415,35 +483,171 @@ class MeshtasticSession(
 
     fun start() {
         if (_state.value.isConnected) {
-            _state.update { it.copy(step = DemoStep.COMPOSE, sendProgress = SendProgress.IDLE, sendStatusText = "") }
+            _state.update {
+                it.copy(
+                    step = DemoStep.CONTACTS,
+                    selectedRecipient = null,
+                    sendProgress = SendProgress.IDLE,
+                    sendStatusText = "",
+                )
+            }
         }
+    }
+
+    fun selectRecipient(id: String) {
+        val recipient = _state.value.recipients.firstOrNull { it.id == id && it.isAvailable } ?: return
+        _state.update {
+            it.copy(
+                step = DemoStep.COMPOSE,
+                selectedRecipient = recipient,
+                draft = "",
+                sendProgress = SendProgress.IDLE,
+                sendStatusText = "",
+                lastPacketId = null,
+            )
+        }
+    }
+
+    fun returnToContacts() {
+        _state.update {
+            it.copy(
+                step = DemoStep.CONTACTS,
+                sendProgress = SendProgress.IDLE,
+                sendStatusText = "",
+                lastPacketId = null,
+            )
+        }
+    }
+
+    fun continueConversation() {
+        if (_state.value.selectedRecipient == null) returnToContacts() else {
+            _state.update {
+                it.copy(
+                    step = DemoStep.COMPOSE,
+                    draft = "",
+                    sendProgress = SendProgress.IDLE,
+                    sendStatusText = "",
+                    lastPacketId = null,
+                )
+            }
+        }
+    }
+
+    fun openOperator() {
+        if (_state.value.isBitcoinRelayActive) return
+        _state.update { it.copy(step = DemoStep.OPERATOR) }
+    }
+
+    fun returnToOperator() {
+        if (_state.value.isBitcoinRelayActive) return
+        _state.update { it.copy(step = DemoStep.OPERATOR) }
+    }
+
+    fun refreshPresence() {
+        val radioClient = client ?: return
+        if (!_state.value.isConnected) return
+        presenceRequestJob?.cancel()
+        presenceRequestJob = scope.launch {
+            runCatching {
+                radioClient.sendText(
+                    text = PRESENCE_REQUEST,
+                    to = NodeId.BROADCAST,
+                    channel = ChannelIndex(0),
+                )
+                delay(PRESENCE_REQUEST_RESPONSE_DELAY_MS)
+                sendPresence(radioClient)
+            }.onFailure { Log.w(TAG, "Presence refresh failed", it) }
+        }
+    }
+
+    fun reconnectRadio() {
+        val address = _state.value.selectedRadioAddress?.takeIf(::isBluetoothAddress) ?: return
+        val name = _state.value.selectedRadioName
+        _state.update {
+            it.copy(
+                step = DemoStep.RADIO_RECONNECT,
+                radioStatus = RadioStatus.RECONNECTING,
+                statusText = "Restarting the BLE link to ${name ?: "attached radio"}…",
+            )
+        }
+        desiredRadioAddress = address
+        desiredRadioName = name
+        connectJob?.cancel()
+        recoveryJob?.cancel()
+        recoveryJob = null
+        connectJob = scope.launch {
+            connectionMutex.withLock { disconnectLocked() }
+            val connected = connectOnce(address, name, isRecovery = true)
+            if (!connected && desiredRadioAddress == address) {
+                _state.update {
+                    it.copy(
+                        radioStatus = RadioStatus.ERROR,
+                        statusText = "Could not reconnect to ${name ?: "attached radio"}",
+                    )
+                }
+            }
+        }
+    }
+
+    fun openBitcoin() {
+        if (_state.value.isConnected) {
+            _state.update { it.copy(step = DemoStep.BITCOIN) }
+        }
+    }
+
+    fun returnHome() {
+        if (_state.value.isBitcoinRelayActive) return
+        _state.update { it.copy(step = DemoStep.HOME) }
     }
 
     fun send() {
         val radioClient = client ?: return
-        val text = _state.value.draft.trim()
-        if (!_state.value.canSend || text.isEmpty()) return
+        val sendState = _state.value
+        val text = sendState.draft.trim()
+        val recipient = sendState.selectedRecipient ?: return
+        if (!sendState.canSend || text.isEmpty()) return
+        val destination = recipient.nodeNumber?.let(::NodeId) ?: NodeId.BROADCAST
 
         scope.launch {
             try {
                 val handle = radioClient.sendText(
                     text = text,
-                    to = NodeId.BROADCAST,
+                    to = destination,
                     channel = ChannelIndex(0),
                 )
                 val packetId = handle.id.toString()
-                Log.i(TAG, "Queued broadcast packet=$packetId bytes=${text.encodeToByteArray().size}")
-                _state.update { it.copy(step = DemoStep.RESULT, lastPacketId = packetId) }
+                Log.i(
+                    TAG,
+                    "Queued message packet=$packetId recipient=${recipient.displayName} destination=$destination " +
+                        "bytes=${text.encodeToByteArray().size}",
+                )
+                _state.update {
+                    it.copy(
+                        step = DemoStep.RESULT,
+                        lastPacketId = packetId,
+                        sent = (
+                            listOf(
+                                SentText(
+                                    packetId = packetId,
+                                    recipientNodeNumber = recipient.nodeNumber,
+                                    recipient = recipient.displayName,
+                                    text = text,
+                                    isBroadcast = recipient.isBroadcast,
+                                ),
+                            ) + it.sent
+                            ).take(MAX_MESSAGES),
+                    )
+                }
                 handle.state
-                    .onEach { sendState ->
-                        val progress = sendState.toProgress()
+                    .onEach { packetState ->
+                        val progress = packetState.toProgress()
                         _state.update {
                             it.copy(
                                 sendProgress = progress,
-                                sendStatusText = sendState.toParticipantText(),
+                                sendStatusText = packetState.toParticipantText(recipient),
                             )
                         }
-                        Log.i(TAG, "Packet=$packetId state=$sendState")
+                        Log.i(TAG, "Packet=$packetId state=$packetState")
                     }
                     .first { it.toProgress() in TERMINAL_SEND_STATES }
             } catch (exception: Exception) {
@@ -614,16 +818,18 @@ class MeshtasticSession(
         _state.update {
             it.copy(
                 step = DemoStep.HOME,
-                draft = "CODEX TEST",
+                selectedRecipient = null,
+                draft = "",
                 sendProgress = SendProgress.IDLE,
                 sendStatusText = "",
                 lastPacketId = null,
-                received = emptyList(),
             )
         }
     }
 
     suspend fun shutdown() {
+        radioChangeJob?.cancel()
+        radioChangeJob = null
         discoveryJob?.cancel()
         discoveryJob = null
         desiredRadioAddress = null
@@ -641,13 +847,17 @@ class MeshtasticSession(
             .onEach { connection ->
                 Log.i(TAG, "BLE state=$connection radio=${name ?: address}")
                 _state.update { it.withConnection(connection) }
-                if (connection is ConnectionState.Connected) reachedConnected = true
+                if (connection is ConnectionState.Connected) {
+                    reachedConnected = true
+                    startPresenceLoop(radioClient)
+                }
                 if (
                     connection is ConnectionState.Disconnected &&
                     reachedConnected &&
                     client === radioClient &&
                     desiredRadioAddress == address
                 ) {
+                    stopPresenceLoop()
                     scheduleRecovery(address, name)
                 }
             }
@@ -655,9 +865,28 @@ class MeshtasticSession(
         observerJobs += radioClient.nodes
             .onEach(::applyNodeChange)
             .launchIn(scope)
+        observerJobs += radioClient.ownNode
+            .onEach { node ->
+                ownNodeNumber = node?.num?.takeIf { it != 0 }
+                if (node != null && node.num != 0) rememberNode(node)
+                _state.update { it.copy(ownNodeNumber = ownNodeNumber) }
+                refreshRecipients()
+            }
+            .launchIn(scope)
         observerJobs += radioClient.textMessages
             .onEach { packet ->
                 val text = packet.asText() ?: return@onEach
+                when (val presence = parsePresenceFrame(text)) {
+                    is PresenceFrame.Announcement -> {
+                        recordPresence(presence, packet.from)
+                        return@onEach
+                    }
+                    PresenceFrame.Request -> {
+                        schedulePresenceResponse(radioClient)
+                        return@onEach
+                    }
+                    null -> Unit
+                }
                 if (packet.from == LAPTOP_NODE_NUMBER && text.startsWith("BTC_")) {
                     val reply = parseBitcoinReply(text)
                     if (reply != null) {
@@ -671,12 +900,25 @@ class MeshtasticSession(
                     // gateway protocol traffic, not participant chat messages.
                     return@onEach
                 }
-                val sender = nodeNames[packet.from] ?: NodeId(packet.from).toString()
+                val advertisedName = knownNodes[packet.from]?.longName
+                val sender = presenceName(packet.from, _state.value.presences)
+                    ?: participantName(packet.from, advertisedName)
                 val packetId = packet.id.toUInt().toString()
+                val isBroadcast = packet.to == NodeId.BROADCAST.raw
                 Log.i(TAG, "Received text packet=$packetId sender=$sender bytes=${text.encodeToByteArray().size}")
                 _state.update {
                     it.copy(
-                        received = (listOf(ReceivedText(packetId, sender, text)) + it.received).take(MAX_MESSAGES),
+                        received = (
+                            listOf(
+                                ReceivedText(
+                                    packetId = packetId,
+                                    senderNodeNumber = packet.from,
+                                    sender = sender,
+                                    text = text,
+                                    isBroadcast = isBroadcast,
+                                ),
+                            ) + it.received
+                            ).take(MAX_MESSAGES),
                     )
                 }
             }
@@ -707,24 +949,121 @@ class MeshtasticSession(
     private fun applyNodeChange(change: NodeChange) {
         when (change) {
             is NodeChange.Snapshot -> {
-                nodeNames.clear()
+                knownNodes.clear()
                 change.nodes.values.forEach(::rememberNode)
             }
             is NodeChange.Added -> rememberNode(change.node)
             is NodeChange.Updated -> rememberNode(change.node)
-            is NodeChange.Removed -> nodeNames.remove(change.nodeId.raw)
+            is NodeChange.Removed -> knownNodes.remove(change.nodeId.raw)
             is NodeChange.CameOnline,
             is NodeChange.WentOffline,
             -> Unit
         }
+        refreshRecipients()
     }
 
     private fun rememberNode(node: NodeInfo) {
         val name = node.user?.long_name?.takeIf(String::isNotBlank) ?: NodeId(node.num).toString()
-        nodeNames[node.num] = name
+        knownNodes[node.num] = KnownMeshNode(node.num, name)
+    }
+
+    private fun refreshRecipients() {
+        val role = _state.value.stationRole ?: return
+        val nowMs = System.currentTimeMillis()
+        _state.update { current ->
+            val active = activePresences(current.presences, nowMs)
+            val recipients = conferenceRecipients(
+                role = role,
+                nodes = knownNodes.values,
+                ownNodeNumber = ownNodeNumber,
+                presences = active,
+                nowMs = nowMs,
+            )
+            val selected = current.selectedRecipient?.let { previous ->
+                recipients.firstOrNull { it.id == previous.id }
+            }
+            current.copy(
+                ownNodeNumber = ownNodeNumber,
+                presences = active,
+                recipients = recipients,
+                selectedRecipient = selected,
+            )
+        }
+    }
+
+    private fun startPresenceLoop(radioClient: RadioClient) {
+        if (presenceJob?.isActive == true && client === radioClient) return
+        stopPresenceLoop()
+        presenceJob = scope.launch {
+            PRESENCE_INITIAL_DELAYS_MS.forEach { delayMs ->
+                delay(delayMs)
+                if (client !== radioClient || !_state.value.isConnected) return@launch
+                sendPresence(radioClient)
+            }
+            while (client === radioClient && _state.value.isConnected) {
+                delay(PRESENCE_INTERVAL_MS)
+                if (client === radioClient && _state.value.isConnected) sendPresence(radioClient)
+            }
+        }
+    }
+
+    private fun stopPresenceLoop() {
+        presenceJob?.cancel()
+        presenceJob = null
+        presenceRequestJob?.cancel()
+        presenceRequestJob = null
+    }
+
+    private fun schedulePresenceResponse(radioClient: RadioClient) {
+        if (client !== radioClient || !_state.value.isConnected) return
+        presenceRequestJob?.cancel()
+        presenceRequestJob = scope.launch {
+            delay(PRESENCE_REQUEST_RESPONSE_DELAY_MS + (_state.value.stationRole?.ordinal ?: 0) * 150L)
+            if (client === radioClient && _state.value.isConnected) sendPresence(radioClient)
+        }
+    }
+
+    private suspend fun sendPresence(radioClient: RadioClient) {
+        val identity = _state.value.stationRole?.conferenceIdentity ?: return
+        val frame = presenceAnnouncementFrame(identity, presenceSession)
+        runCatching {
+            val handle = radioClient.sendText(
+                text = frame,
+                to = NodeId.BROADCAST,
+                channel = ChannelIndex(0),
+            )
+            ownNodeNumber?.let { nodeNumber ->
+                recordPresence(PresenceFrame.Announcement(identity, presenceSession), nodeNumber)
+            }
+            Log.d(TAG, "Presence announced identity=$identity packet=${handle.id} node=$ownNodeNumber")
+        }.onFailure { exception ->
+            if (exception is CancellationException) throw exception
+            Log.w(TAG, "Presence announcement failed identity=$identity", exception)
+        }
+    }
+
+    private fun recordPresence(announcement: PresenceFrame.Announcement, nodeNumber: Int) {
+        if (nodeNumber == 0) return
+        val nowMs = System.currentTimeMillis()
+        _state.update { current ->
+            val active = activePresences(current.presences, nowMs)
+            current.copy(
+                presences = active.filterNot { presence ->
+                    presence.identity == announcement.identity &&
+                        (presence.session == announcement.session || presence.nodeNumber == nodeNumber)
+                } + StationPresence(
+                    identity = announcement.identity,
+                    nodeNumber = nodeNumber,
+                    session = announcement.session,
+                    lastSeenAtMs = nowMs,
+                ),
+            )
+        }
+        refreshRecipients()
     }
 
     private suspend fun disconnectLocked() {
+        stopPresenceLoop()
         bitcoinRelayJob?.cancel()
         bitcoinRelayJob = null
         if (_state.value.isBitcoinRelayActive) {
@@ -737,7 +1076,10 @@ class MeshtasticSession(
         }
         observerJobs.forEach(Job::cancel)
         observerJobs.clear()
-        nodeNames.clear()
+        knownNodes.clear()
+        ownNodeNumber = null
+        _state.update { it.copy(ownNodeNumber = null) }
+        refreshRecipients()
         val oldClient = client
         client = null
         if (oldClient != null) {
@@ -813,6 +1155,9 @@ class MeshtasticSession(
         const val BITCOIN_FINAL_TIMEOUT_MS = 60_000L
         const val RECOVERY_INITIAL_DELAY_MS = 1_000L
         const val RECOVERY_MAX_DELAY_MS = 15_000L
+        const val PRESENCE_REQUEST_RESPONSE_DELAY_MS = 450L
+        const val PRESENCE_INTERVAL_MS = 60_000L
+        val PRESENCE_INITIAL_DELAYS_MS = listOf(0L, 2_000L, 3_000L)
         val SDK_LOGGER = LogSink { level, tag, message, cause ->
             val sdkTag = "MeshtasticSDK/$tag"
             when (level) {
@@ -848,6 +1193,7 @@ class MeshtasticSession(
             },
             selectedRadioAddress = savedAddress?.takeIf(::isBluetoothAddress),
             selectedRadioName = savedName,
+            recipients = stationRole?.let { conferenceRecipients(it, emptyList()) }.orEmpty(),
             bitcoinQueueTotal = queueTotal,
             bitcoinQueueIndex = queueIndex,
             bitcoinStatusText = if (queueTotal == 0) {
@@ -901,11 +1247,23 @@ private fun SendState.toProgress(): SendProgress =
         is SendState.Failed -> SendProgress.FAILED
     }
 
-private fun SendState.toParticipantText(): String =
+private fun SendState.toParticipantText(recipient: MeshRecipient): String =
     when (this) {
         SendState.Queued -> "Queued for the radio"
-        SendState.Sent -> "Transmitted over LoRa"
-        SendState.Acked -> "Acknowledged by the destination"
-        SendState.Delivered -> "Relayed by the mesh"
+        SendState.Sent -> if (recipient.isBroadcast) {
+            "Broadcast transmitted over LoRa"
+        } else {
+            "Travelling across the mesh to ${recipient.displayName}"
+        }
+        SendState.Acked -> if (recipient.isBroadcast) {
+            "Broadcast accepted by the radio"
+        } else {
+            "${recipient.displayName} acknowledged the packet"
+        }
+        SendState.Delivered -> if (recipient.isBroadcast) {
+            "Relayed by the mesh"
+        } else {
+            "Delivered to ${recipient.displayName}"
+        }
         is SendState.Failed -> "Send failed: $reason"
     }

@@ -86,6 +86,7 @@ class MeshDemoApplication : Application() {
         _uiState.update {
             it.copy(
                 stationRole = role,
+                isChoosingStation = false,
                 statusText = "${role.stationName} selected · ready to connect",
             )
         }
@@ -96,6 +97,7 @@ class MeshDemoApplication : Application() {
         _uiState.update {
             it.copy(
                 stationRole = null,
+                isChoosingStation = false,
                 step = DemoStep.HOME,
                 statusText = "Choose this phone's station",
                 bitcoinQueueIndex = 0,

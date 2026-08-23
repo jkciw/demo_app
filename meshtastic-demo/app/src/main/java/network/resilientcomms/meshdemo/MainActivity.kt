@@ -47,7 +47,7 @@ class MainActivity : ComponentActivity() {
 
     private fun selectStation(role: StationRole) {
         viewModel.selectStation(role)
-        ensurePermissionsAndConnect()
+        if (!viewModel.uiState.value.isConnected) ensurePermissionsAndConnect()
     }
 
     private fun ensurePermissionsAndConnect() {
