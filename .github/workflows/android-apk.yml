@@ -153,11 +153,16 @@ jobs:
           apk="release/Meshtastic-Conference-Demo.apk"
           checksum="release/Meshtastic-Conference-Demo.apk.sha256"
 
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" "${apk}" "${checksum}" --clobber
-            gh release edit "${tag}" --latest
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${apk}" "${checksum}" \
+              --clobber \
+              --repo "${GITHUB_REPOSITORY}"
+            gh release edit "${tag}" \
+              --latest \
+              --repo "${GITHUB_REPOSITORY}"
           else
             gh release create "${tag}" "${apk}" "${checksum}" \
+              --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
               --title "Meshtastic Conference Demo ${GITHUB_SHA:0:12}" \
               --generate-notes \
