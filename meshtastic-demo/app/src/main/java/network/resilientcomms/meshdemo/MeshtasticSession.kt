@@ -886,18 +886,55 @@ class MeshtasticSession(
                         bitcoinStatusText = "Transaction received by laptop · waiting for Bitcoin Core",
                     )
                 }
-                val result = awaitFinalReply<BitcoinReply.Result>(session)
-                    ?: throw BitcoinRelayException("Laptop did not return the confirmed transaction result")
-
-                runCatching {
-                    radioClient.sendText(
-                        text = bitcoinResultAcknowledgementFrame(session),
+                var result: BitcoinReply.Result? = null
+                for (attempt in 1..BITCOIN_RESULT_ATTEMPTS) {
+                    _state.update {
+                        it.copy(
+                            bitcoinStatusText = if (attempt == 1) {
+                                "Transaction received by laptop · waiting for Bitcoin Core"
+                            } else {
+                                "Checking confirmed result · attempt $attempt"
+                            },
+                        )
+                    }
+                    val handle = radioClient.sendText(
+                        text = bitcoinResultRequestFrame(session),
                         to = NodeId.BROADCAST,
                         channel = ChannelIndex(0),
                     )
-                }.onFailure { exception ->
-                    if (exception is CancellationException) throw exception
-                    Log.w(TAG, "Could not acknowledge Bitcoin result session=$session", exception)
+                    Log.i(TAG, "Bitcoin session=$session result request packet=${handle.id} attempt=$attempt")
+                    result = awaitFinalReply<BitcoinReply.Result>(
+                        session,
+                        BITCOIN_RESULT_REPLY_TIMEOUT_MS,
+                    )
+                    if (result != null) break
+                    if (attempt < BITCOIN_RESULT_ATTEMPTS) {
+                        delay(
+                            Random.nextLong(
+                                BITCOIN_RESULT_RETRY_MIN_MS,
+                                BITCOIN_RESULT_RETRY_MAX_MS + 1,
+                            ),
+                        )
+                    }
+                }
+                val confirmedResult = result ?: throw BitcoinRelayException(
+                    "Laptop did not return the confirmed transaction result",
+                )
+
+                repeat(BITCOIN_RESULT_ACK_ATTEMPTS) { zeroBasedAttempt ->
+                    runCatching {
+                        radioClient.sendText(
+                            text = bitcoinResultAcknowledgementFrame(session),
+                            to = NodeId.BROADCAST,
+                            channel = ChannelIndex(0),
+                        )
+                    }.onFailure { exception ->
+                        if (exception is CancellationException) throw exception
+                        Log.w(TAG, "Could not acknowledge Bitcoin result session=$session", exception)
+                    }
+                    if (zeroBasedAttempt + 1 < BITCOIN_RESULT_ACK_ATTEMPTS) {
+                        delay(BITCOIN_RESULT_ACK_RETRY_MS)
+                    }
                 }
 
                 val nextIndex = queueIndex + 1
@@ -906,12 +943,15 @@ class MeshtasticSession(
                     it.copy(
                         bitcoinQueueIndex = nextIndex,
                         bitcoinRelayProgress = BitcoinRelayProgress.CONFIRMED,
-                        bitcoinStatusText = "Confirmed in Regtest block ${result.blockHeight}",
-                        bitcoinTxid = result.txid,
-                        bitcoinBlockHeight = result.blockHeight,
+                        bitcoinStatusText = "Confirmed in Regtest block ${confirmedResult.blockHeight}",
+                        bitcoinTxid = confirmedResult.txid,
+                        bitcoinBlockHeight = confirmedResult.blockHeight,
                     )
                 }
-                Log.i(TAG, "Bitcoin session=$session confirmed txid=${result.txid} height=${result.blockHeight}")
+                Log.i(
+                    TAG,
+                    "Bitcoin session=$session confirmed txid=${confirmedResult.txid} height=${confirmedResult.blockHeight}",
+                )
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: BitcoinRelayException) {
@@ -1341,8 +1381,11 @@ class MeshtasticSession(
             }
         }
 
-    private suspend inline fun <reified T : BitcoinReply> awaitFinalReply(session: String): T? {
-        val reply = withTimeoutOrNull(BITCOIN_FINAL_TIMEOUT_MS) {
+    private suspend inline fun <reified T : BitcoinReply> awaitFinalReply(
+        session: String,
+        timeoutMs: Long,
+    ): T? {
+        val reply = withTimeoutOrNull(timeoutMs) {
             bitcoinReplies.first {
                 it.session == session && (it is T || it is BitcoinReply.Rejected)
             }
@@ -1388,7 +1431,12 @@ class MeshtasticSession(
         const val BITCOIN_SLOT_RETRY_MAX_MS = 6_000L
         const val BITCOIN_RADIO_SEND_TIMEOUT_MS = 10_000L
         const val BITCOIN_CHUNK_TIMEOUT_MS = 30_000L
-        const val BITCOIN_FINAL_TIMEOUT_MS = 150_000L
+        const val BITCOIN_RESULT_ATTEMPTS = 6
+        const val BITCOIN_RESULT_REPLY_TIMEOUT_MS = 25_000L
+        const val BITCOIN_RESULT_RETRY_MIN_MS = 3_000L
+        const val BITCOIN_RESULT_RETRY_MAX_MS = 7_000L
+        const val BITCOIN_RESULT_ACK_ATTEMPTS = 2
+        const val BITCOIN_RESULT_ACK_RETRY_MS = 2_000L
         const val RECOVERY_INITIAL_DELAY_MS = 1_000L
         const val RECOVERY_MAX_DELAY_MS = 15_000L
         const val PRESENCE_INITIAL_DELAY_MS = 5_000L

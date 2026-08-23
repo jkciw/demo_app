@@ -102,10 +102,12 @@ BTC_TX|<session>|<chunk>/<total>|<hex>
 ```
 
 It waits for `BTC_CHUNK_ACK` before sending the next chunk and retries an unacknowledged chunk up to
-three times. After Bitcoin Core accepts and confirms the transaction, the Gateway repeats one
-combined `BTC_RESULT|<session>|<txid>|<block-height>` frame three times. The phone replies with
-`BTC_RESULT_ACK|<session>` and advances its local queue only after receiving the result. Presence
-announcements pause during an active relay, and a stalled upload releases its slot after 75 seconds.
+three times. After the last chunk, the phone polls with `BTC_RESULT_REQUEST|<session>` until the
+Gateway returns the stored `BTC_RESULT|<session>|<txid>|<block-height>`. The phone replies with
+`BTC_RESULT_ACK|<session>` and advances its local queue only after receiving the result. The Gateway
+holds the active slot through this handshake, preventing the next queued upload from colliding with
+result delivery. Presence announcements pause during an active relay, and a stalled upload releases
+its slot after 75 seconds.
 
 Start the laptop dashboard before relaying:
 

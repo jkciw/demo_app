@@ -17,12 +17,12 @@ from typing import Any, Callable, Protocol
 
 FRAME_PREFIX = "BTC_TX"
 BEGIN_PREFIX = "BTC_BEGIN"
+RESULT_REQUEST_PREFIX = "BTC_RESULT_REQUEST"
 RESULT_ACK_PREFIX = "BTC_RESULT_ACK"
 MAX_CHUNKS = 512
 MAX_TRANSACTION_BYTES = 100_000
 SESSION_TTL_SECONDS = 10 * 60
 ACTIVE_SLOT_IDLE_SECONDS = 75
-RESULT_REPEAT_COUNT = 3
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
 POSITION_PATTERN = re.compile(r"^(\d+)/(\d+)$")
 HEX_PATTERN = re.compile(r"^[0-9A-Fa-f]+$")
@@ -271,6 +271,8 @@ class BitcoinTransactionBridge:
         stripped = text.strip()
         if stripped.startswith(f"{BEGIN_PREFIX}|"):
             return self._handle_begin(stripped, source_id, sender, channel)
+        if stripped.startswith(f"{RESULT_REQUEST_PREFIX}|"):
+            return self._handle_result_request(stripped, source_id, channel)
         if stripped.startswith(f"{RESULT_ACK_PREFIX}|"):
             return self._handle_result_ack(stripped, source_id)
         if not stripped.startswith(f"{FRAME_PREFIX}|"):
@@ -425,9 +427,9 @@ class BitcoinTransactionBridge:
                     "resultAcknowledged": False,
                 }
             )
-            self._send_completed(session, completed, source_id, channel)
-            with self._lock:
-                self._finish_active_locked(key)
+            # The phone requests this stored result after it has consumed the final
+            # chunk acknowledgement. Keeping the slot active until BTC_RESULT_ACK
+            # prevents the next upload from colliding with result delivery.
         except Exception as error:
             detail = self._error_code(error)
             print(
@@ -458,8 +460,7 @@ class BitcoinTransactionBridge:
         channel: int,
     ) -> None:
         frame = f"BTC_RESULT|{session}|{completed.txid}|{completed.block_height}"
-        for _ in range(RESULT_REPEAT_COUNT):
-            self._safe_reply(frame, source_id, channel)
+        self._safe_reply(frame, source_id, channel)
 
     def _reject_locked(self, incoming: IncomingTransaction, reason: str) -> None:
         key = (incoming.source_id, incoming.session)
@@ -532,6 +533,22 @@ class BitcoinTransactionBridge:
                     "resultAcknowledged": True,
                 }
             )
+            self._finish_active_locked(key)
+        return True
+
+    def _handle_result_request(self, text: str, source_id: str, channel: int) -> bool:
+        parts = text.split("|")
+        if len(parts) != 2 or not SESSION_PATTERN.fullmatch(parts[1]):
+            return True
+        key = (source_id, parts[1])
+        with self._lock:
+            self._expire_sessions_locked()
+            admission = self._admissions.get(key)
+            if admission is not None:
+                admission.updated_at = self.clock()
+            completed = self._completed.get(key)
+        if completed is not None:
+            self._send_completed(parts[1], completed, source_id, channel)
         return True
 
     def _activate_locked(self, admission: Admission) -> None:

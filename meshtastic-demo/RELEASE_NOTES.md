@@ -1,4 +1,4 @@
-# Meshtastic Conference Demo v0.3.0
+# Meshtastic Conference Demo v0.3.1
 
 This is the conference reliability build. The same universal APK is used on both participant
 phones; choose **Alice** or **Bob** inside the app.
@@ -8,10 +8,11 @@ phones; choose **Alice** or **Bob** inside the app.
 - **Simultaneous Bitcoin requests are orderly:** Alice and Bob request a Gateway upload slot before
   transmitting transaction chunks. The first decoded request becomes active and the other phone
   displays its FIFO queue position, then starts automatically when the Gateway grants its turn.
-- **Final results survive packet loss:** the Gateway returns one compact result containing both the
-  TXID and Regtest block height, repeats it three times, and records the phone's result
-  acknowledgement. A missed intermediate packet can no longer strand the phone at "Waiting for
-  Bitcoin Core."
+- **Final results survive packet loss:** after its final chunk is acknowledged, the phone requests
+  the stored TXID and Regtest block height until the Gateway answers. The Gateway keeps that phone's
+  slot until the result is acknowledged, so the next queued upload cannot collide with result
+  delivery and strand the first phone at "Waiting for Bitcoin Core."
+- **Installed build is visible:** the Operator Console shows the app version and build number.
 - **Transaction traffic gets priority:** phone and Gateway presence announcements pause while an
   upload slot is active. A stalled station releases its slot after 75 seconds without a valid
   chunk, so the next visitor cannot remain blocked indefinitely.

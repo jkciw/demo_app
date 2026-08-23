@@ -115,6 +115,7 @@ class MeshDemoModelsTest {
     @Test
     fun bitcoinReplies_parseAcknowledgementBroadcastConfirmationAndFailure() {
         assertEquals("BTC_BEGIN|alpha1|4", bitcoinBeginFrame("alpha1", 4))
+        assertEquals("BTC_RESULT_REQUEST|alpha1", bitcoinResultRequestFrame("alpha1"))
         assertEquals("BTC_RESULT_ACK|alpha1", bitcoinResultAcknowledgementFrame("alpha1"))
         assertEquals(
             BitcoinReply.SlotReady("alpha1"),

@@ -620,6 +620,16 @@ private fun OperatorScreen(
             SecondaryButton("RESET THIS PHONE'S QUEUE", onResetBitcoinQueue, !state.isBitcoinRelayActive)
         }
     }
+
+    Spacer(Modifier.height(18.dp))
+    Text(
+        "APP VERSION ${BuildConfig.VERSION_NAME} · BUILD ${BuildConfig.VERSION_CODE}",
+        color = Muted,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable

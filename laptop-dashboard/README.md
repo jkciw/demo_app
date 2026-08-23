@@ -101,13 +101,15 @@ protocol traffic from their chat inbox:
 
 ```text
 BTC_CHUNK_ACK|<session>|<chunk>
+BTC_RESULT_REQUEST|<session>
 BTC_RESULT|<session>|<txid>|<block-height>
 BTC_RESULT_ACK|<session>
 BTC_NACK|<session>|<reason>
 ```
 
 The laptop acknowledges every valid chunk, reassembles chunks received out of order, submits the
-completed raw transaction with `sendrawtransaction`, mines one block, and repeats the combined
-result three times. The dashboard shows one active reservation plus each queued station. Repeating
-a request, chunk, or completed session is safe and does not broadcast the transaction a second
-time. A reservation that receives no valid chunk for 75 seconds expires and advances the queue.
+completed raw transaction with `sendrawtransaction`, and mines one block. The result remains stored
+while the phone polls for it, and the active reservation is released only after `BTC_RESULT_ACK`.
+The dashboard shows one active reservation plus each queued station. Repeating a request, chunk, or
+completed session is safe and does not broadcast the transaction a second time. A reservation that
+receives no valid protocol frame for 75 seconds expires and advances the queue.

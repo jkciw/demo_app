@@ -64,7 +64,11 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
         reply_text = [reply[0] for reply in self.replies]
         self.assertIn("BTC_READY|demo1", reply_text)
         self.assertIn("BTC_CHUNK_ACK|demo1|3", reply_text)
-        self.assertEqual(3, reply_text.count(f"BTC_RESULT|demo1|{'a' * 64}|104"))
+        self.assertNotIn(f"BTC_RESULT|demo1|{'a' * 64}|104", reply_text)
+
+        self.send("BTC_RESULT_REQUEST|demo1")
+        reply_text = [reply[0] for reply in self.replies]
+        self.assertEqual(1, reply_text.count(f"BTC_RESULT|demo1|{'a' * 64}|104"))
 
         self.send("BTC_RESULT_ACK|demo1")
         transaction = self.hub.snapshot()["transactions"][0]
@@ -84,7 +88,7 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
             reply for reply in self.replies
             if reply[0] == f"BTC_RESULT|retry1|{'a' * 64}|104"
         ]
-        self.assertEqual(6, len(results))
+        self.assertEqual(1, len(results))
 
     def test_simultaneous_stations_are_serialized_fifo(self):
         self.send("BTC_BEGIN|alice1|2", "!alice", "Alice")
@@ -104,11 +108,24 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
         self.send("BTC_TX|alice1|1/2|0102", "!alice", "Alice")
         self.send("BTC_TX|alice1|2/2|0304", "!alice", "Alice")
         self.assertEqual(["01020304"], self.rpc.broadcasts)
+        self.assertNotIn("BTC_READY|bob1", [reply[0] for reply in self.replies])
+
+        self.send("BTC_RESULT_REQUEST|alice1", "!alice", "Alice")
+        self.send("BTC_RESULT_ACK|alice1", "!alice", "Alice")
         self.assertIn("BTC_READY|bob1", [reply[0] for reply in self.replies])
 
         self.send("BTC_TX|bob1|1/2|0506", "!bob", "Bob")
         self.send("BTC_TX|bob1|2/2|0708", "!bob", "Bob")
         self.assertEqual(["01020304", "05060708"], self.rpc.broadcasts)
+
+    def test_result_request_waits_for_completed_transaction(self):
+        self.send("BTC_BEGIN|pending1|2")
+        self.send("BTC_TX|pending1|1/2|0102")
+
+        replies_before = list(self.replies)
+        self.send("BTC_RESULT_REQUEST|pending1")
+
+        self.assertEqual(replies_before, self.replies)
 
     def test_stalled_active_station_releases_slot_to_next_station(self):
         now = [100.0]

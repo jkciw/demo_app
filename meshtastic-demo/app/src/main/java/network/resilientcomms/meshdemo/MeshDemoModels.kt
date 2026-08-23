@@ -435,6 +435,11 @@ internal fun bitcoinResultAcknowledgementFrame(session: String): String {
     return "BTC_RESULT_ACK|$session"
 }
 
+internal fun bitcoinResultRequestFrame(session: String): String {
+    require(Regex("^[A-Za-z0-9_-]{1,24}$").matches(session))
+    return "BTC_RESULT_REQUEST|$session"
+}
+
 internal fun parseBitcoinReply(text: String): BitcoinReply? {
     val parts = text.trim().split('|')
     if (parts.size !in 2..4) return null
