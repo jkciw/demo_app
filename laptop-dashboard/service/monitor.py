@@ -290,7 +290,7 @@ class MeshtasticAdapter(threading.Thread):
         self._presence_names[source] = display_name
 
     def _send_gateway_presence(self) -> None:
-        if self.interface is None:
+        if self.interface is None or self.transaction_bridge.has_active_transfer:
             return
         frame = presence_announcement("GATEWAY", self._presence_session)
         with self._send_lock:

@@ -74,8 +74,16 @@ stored under `state/` so its destination address remains stable.
 1. Bitcoin transaction traffic appears in the separate **Transaction relay**
 panel and does not flood the ordinary message list.
 
-The phone sends the signed transaction hex in one-based chunks. Keep each hex
-payload at or below 170 characters:
+Each phone first requests the Gateway's single FIFO upload slot:
+
+```text
+BTC_BEGIN|<session>|<total-chunks>
+BTC_READY|<session>
+BTC_QUEUED|<session>|<position>
+```
+
+Only the active station sends signed transaction hex in one-based chunks. The conference app uses
+100 hexadecimal characters per payload:
 
 ```text
 BTC_TX|<session>|<chunk>/<total>|<hex>
@@ -93,13 +101,13 @@ protocol traffic from their chat inbox:
 
 ```text
 BTC_CHUNK_ACK|<session>|<chunk>
-BTC_ACK|<session>|<txid>
-BTC_CONF|<session>|<block-height>
+BTC_RESULT|<session>|<txid>|<block-height>
+BTC_RESULT_ACK|<session>
 BTC_NACK|<session>|<reason>
 ```
 
-The laptop acknowledges every valid chunk, reassembles chunks received out of
-order, submits the completed raw transaction with `sendrawtransaction`, mines
-one block, and returns the transaction ID and confirmation height. Repeating a
-chunk or a completed session is safe and does not broadcast the transaction a
-second time.
+The laptop acknowledges every valid chunk, reassembles chunks received out of order, submits the
+completed raw transaction with `sendrawtransaction`, mines one block, and repeats the combined
+result three times. The dashboard shows one active reservation plus each queued station. Repeating
+a request, chunk, or completed session is safe and does not broadcast the transaction a second
+time. A reservation that receives no valid chunk for 75 seconds expires and advances the queue.

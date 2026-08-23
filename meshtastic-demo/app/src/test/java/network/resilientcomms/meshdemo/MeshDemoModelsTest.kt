@@ -114,6 +114,16 @@ class MeshDemoModelsTest {
 
     @Test
     fun bitcoinReplies_parseAcknowledgementBroadcastConfirmationAndFailure() {
+        assertEquals("BTC_BEGIN|alpha1|4", bitcoinBeginFrame("alpha1", 4))
+        assertEquals("BTC_RESULT_ACK|alpha1", bitcoinResultAcknowledgementFrame("alpha1"))
+        assertEquals(
+            BitcoinReply.SlotReady("alpha1"),
+            parseBitcoinReply("BTC_READY|alpha1"),
+        )
+        assertEquals(
+            BitcoinReply.Queued("alpha1", 1),
+            parseBitcoinReply("BTC_QUEUED|alpha1|1"),
+        )
         assertEquals(
             BitcoinReply.ChunkAcknowledged("alpha1", 2),
             parseBitcoinReply("BTC_CHUNK_ACK|alpha1|2"),
@@ -127,11 +137,16 @@ class MeshDemoModelsTest {
             parseBitcoinReply("BTC_CONF|alpha1|105"),
         )
         assertEquals(
+            BitcoinReply.Result("alpha1", "b".repeat(64), 106),
+            parseBitcoinReply("BTC_RESULT|alpha1|${"B".repeat(64)}|106"),
+        )
+        assertEquals(
             BitcoinReply.Rejected("alpha1", "inputs-spent"),
             parseBitcoinReply("BTC_NACK|alpha1|inputs-spent"),
         )
         assertEquals(null, parseBitcoinReply("ordinary message"))
         assertEquals(null, parseBitcoinReply("BTC_ACK|alpha1|not-a-txid"))
+        assertEquals(null, parseBitcoinReply("BTC_RESULT|alpha1|not-a-txid|106"))
     }
 
     @Test
@@ -157,6 +172,7 @@ class MeshDemoModelsTest {
         assertFalse(ready.copy(radioStatus = RadioStatus.DISCONNECTED).canRelayBitcoin)
         assertFalse(ready.copy(bitcoinQueueIndex = 2).canRelayBitcoin)
         assertFalse(ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.SENDING).canRelayBitcoin)
+        assertFalse(ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.QUEUED).canRelayBitcoin)
         assertFalse(ready.copy(recipients = emptyList()).canOpenBitcoin)
         assertFalse(ready.copy(recipients = listOf(gateway.copy(isAvailable = false))).canRelayBitcoin)
     }

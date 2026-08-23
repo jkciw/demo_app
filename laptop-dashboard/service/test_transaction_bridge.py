@@ -6,6 +6,7 @@ from transaction_bridge import (
     BitcoinRegtest,
     BitcoinRpcError,
     BitcoinTransactionBridge,
+    parse_begin_frame,
     parse_chunk_frame,
 )
 
@@ -45,10 +46,11 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
             executor=InlineExecutor(),
         )
 
-    def send(self, text):
-        return self.bridge.handle_text(text, "!alpha", "Alpha", 2)
+    def send(self, text, source="!alpha", sender="Alice"):
+        return self.bridge.handle_text(text, source, sender, 2)
 
     def test_reassembles_broadcasts_mines_and_confirms(self):
+        self.assertTrue(self.send("BTC_BEGIN|demo1|3"))
         self.assertTrue(self.send("BTC_TX|demo1|2/3|0304"))
         self.assertTrue(self.send("BTC_TX|demo1|1/3|0102"))
         self.assertTrue(self.send("BTC_TX|demo1|3/3|0506"))
@@ -60,11 +62,16 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
         self.assertEqual(104, transaction["blockHeight"])
         self.assertEqual("a" * 64, transaction["txid"])
         reply_text = [reply[0] for reply in self.replies]
+        self.assertIn("BTC_READY|demo1", reply_text)
         self.assertIn("BTC_CHUNK_ACK|demo1|3", reply_text)
-        self.assertIn(f"BTC_ACK|demo1|{'a' * 64}", reply_text)
-        self.assertIn("BTC_CONF|demo1|104", reply_text)
+        self.assertEqual(3, reply_text.count(f"BTC_RESULT|demo1|{'a' * 64}|104"))
+
+        self.send("BTC_RESULT_ACK|demo1")
+        transaction = self.hub.snapshot()["transactions"][0]
+        self.assertTrue(transaction["resultAcknowledged"])
 
     def test_duplicate_chunk_and_completed_retry_do_not_rebroadcast(self):
+        self.send("BTC_BEGIN|retry1|2")
         self.send("BTC_TX|retry1|1/2|0102")
         self.send("BTC_TX|retry1|1/2|0102")
         transaction = self.hub.snapshot()["transactions"][0]
@@ -73,8 +80,55 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
         self.send("BTC_TX|retry1|2/2|0304")
         self.send("BTC_TX|retry1|2/2|0304")
         self.assertEqual(["01020304"], self.rpc.broadcasts)
-        confirmations = [reply for reply in self.replies if reply[0] == "BTC_CONF|retry1|104"]
-        self.assertEqual(2, len(confirmations))
+        results = [
+            reply for reply in self.replies
+            if reply[0] == f"BTC_RESULT|retry1|{'a' * 64}|104"
+        ]
+        self.assertEqual(6, len(results))
+
+    def test_simultaneous_stations_are_serialized_fifo(self):
+        self.send("BTC_BEGIN|alice1|2", "!alice", "Alice")
+        self.send("BTC_BEGIN|bob1|2", "!bob", "Bob")
+
+        replies = [reply[0] for reply in self.replies]
+        self.assertIn("BTC_READY|alice1", replies)
+        self.assertIn("BTC_QUEUED|bob1|1", replies)
+        queued = next(
+            item for item in self.hub.snapshot()["transactions"] if item["session"] == "bob1"
+        )
+        self.assertEqual(("queued", 1), (queued["status"], queued["queuePosition"]))
+
+        self.send("BTC_TX|bob1|1/2|0506", "!bob", "Bob")
+        self.assertEqual([], self.rpc.broadcasts)
+
+        self.send("BTC_TX|alice1|1/2|0102", "!alice", "Alice")
+        self.send("BTC_TX|alice1|2/2|0304", "!alice", "Alice")
+        self.assertEqual(["01020304"], self.rpc.broadcasts)
+        self.assertIn("BTC_READY|bob1", [reply[0] for reply in self.replies])
+
+        self.send("BTC_TX|bob1|1/2|0506", "!bob", "Bob")
+        self.send("BTC_TX|bob1|2/2|0708", "!bob", "Bob")
+        self.assertEqual(["01020304", "05060708"], self.rpc.broadcasts)
+
+    def test_stalled_active_station_releases_slot_to_next_station(self):
+        now = [100.0]
+        replies = []
+        bridge = BitcoinTransactionBridge(
+            self.hub,
+            self.rpc,
+            lambda text, destination, channel: replies.append((text, destination, channel)),
+            executor=InlineExecutor(),
+            clock=lambda: now[0],
+        )
+        bridge.handle_text("BTC_BEGIN|alice-stall|2", "!alice", "Alice", 0)
+        bridge.handle_text("BTC_BEGIN|bob-waits|2", "!bob", "Bob", 0)
+
+        now[0] += 76.0
+        bridge.handle_text("BTC_BEGIN|bob-waits|2", "!bob", "Bob", 0)
+
+        reply_text = [reply[0] for reply in replies]
+        self.assertIn("BTC_NACK|alice-stall|slot-timeout", reply_text)
+        self.assertIn("BTC_READY|bob-waits", reply_text)
 
     def test_invalid_hex_is_rejected_without_rpc(self):
         self.assertTrue(self.send("BTC_TX|broken1|1/1|not-hex"))
@@ -85,6 +139,7 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
         self.assertEqual("BTC_NACK|broken1|bad-hex", self.replies[0][0])
 
     def test_incomplete_transfer_stays_in_receiving_state(self):
+        self.send("BTC_BEGIN|partial1|3")
         self.send("BTC_TX|partial1|1/3|0102")
         transaction = self.hub.snapshot()["transactions"][0]
         self.assertEqual("receiving", transaction["status"])
@@ -97,8 +152,13 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
         self.assertEqual([], self.hub.snapshot()["transactions"])
 
     def test_parser_uses_one_based_chunk_numbers(self):
+        begin = parse_begin_frame("BTC_BEGIN|s-1|4")
+        self.assertEqual(("s-1", 4), (begin.session, begin.total))
         frame = parse_chunk_frame("BTC_TX|s-1|2/4|A0ff")
-        self.assertEqual(("s-1", 2, 4, "a0ff"), (frame.session, frame.index, frame.total, frame.payload))
+        self.assertEqual(
+            ("s-1", 2, 4, "a0ff"),
+            (frame.session, frame.index, frame.total, frame.payload),
+        )
         with self.assertRaisesRegex(ValueError, "bad-position"):
             parse_chunk_frame("BTC_TX|s-1|0/4|a0ff")
 

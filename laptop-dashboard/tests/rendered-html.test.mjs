@@ -35,7 +35,8 @@ test("server-renders the conference dashboard and Bitcoin relay", async () => {
   assert.match(html, /BITCOIN \/ REGTEST/);
   assert.match(html, /RPC port/);
   assert.match(html, />18443</);
-  assert.match(html, /Waiting for a signed transaction from Alpha or Bravo/);
+  assert.match(html, /Waiting for a signed transaction from Alice or Bob/);
+  assert.match(html, /SLOT AVAILABLE/);
 });
 
 test("client subscribes to collector snapshots and renders relay states", async () => {
@@ -51,9 +52,13 @@ test("client subscribes to collector snapshots and renders relay states", async 
   assert.match(page, /transaction\.blockHeight/);
   assert.match(css, /\.transaction-panel/);
   assert.match(css, /\.transaction-status\.confirmed/);
+  assert.match(css, /\.transaction-status\.queued/);
+  assert.match(bridge, /BTC_BEGIN/);
+  assert.match(bridge, /BTC_READY/);
+  assert.match(bridge, /BTC_QUEUED/);
   assert.match(bridge, /BTC_CHUNK_ACK/);
-  assert.match(bridge, /BTC_ACK/);
-  assert.match(bridge, /BTC_CONF/);
+  assert.match(bridge, /BTC_RESULT/);
+  assert.match(bridge, /BTC_RESULT_ACK/);
   assert.match(bridge, /sendrawtransaction/);
   assert.match(bridge, /generatetoaddress/);
 });

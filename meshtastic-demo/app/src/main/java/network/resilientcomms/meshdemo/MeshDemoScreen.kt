@@ -1780,4 +1780,10 @@ private fun statusColor(state: MeshDemoState): Color =
     if (state.sendProgress == SendProgress.FAILED) Danger else Cyan
 
 private fun bitcoinStatusColor(progress: BitcoinRelayProgress): Color =
-    if (progress == BitcoinRelayProgress.FAILED) Danger else Cyan
+    when (progress) {
+        BitcoinRelayProgress.FAILED -> Danger
+        BitcoinRelayProgress.REQUESTING_GATEWAY,
+        BitcoinRelayProgress.QUEUED,
+        -> BitcoinOrange
+        else -> Cyan
+    }

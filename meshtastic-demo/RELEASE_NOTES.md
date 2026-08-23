@@ -1,10 +1,20 @@
-# Meshtastic Conference Demo v0.2.1
+# Meshtastic Conference Demo v0.3.0
 
 This is the conference reliability build. The same universal APK is used on both participant
 phones; choose **Alice** or **Bob** inside the app.
 
 ## What changed
 
+- **Simultaneous Bitcoin requests are orderly:** Alice and Bob request a Gateway upload slot before
+  transmitting transaction chunks. The first decoded request becomes active and the other phone
+  displays its FIFO queue position, then starts automatically when the Gateway grants its turn.
+- **Final results survive packet loss:** the Gateway returns one compact result containing both the
+  TXID and Regtest block height, repeats it three times, and records the phone's result
+  acknowledgement. A missed intermediate packet can no longer strand the phone at "Waiting for
+  Bitcoin Core."
+- **Transaction traffic gets priority:** phone and Gateway presence announcements pause while an
+  upload slot is active. A stalled station releases its slot after 75 seconds without a valid
+  chunk, so the next visitor cannot remain blocked indefinitely.
 - **Change Radio is now safe:** opening the radio picker, scanning, or pressing Back keeps the
   current BLE connection alive. The app switches only after the operator selects another paired
   Meshtastic radio.

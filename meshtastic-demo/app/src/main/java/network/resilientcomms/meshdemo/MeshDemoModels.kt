@@ -99,6 +99,8 @@ enum class SendProgress {
 
 enum class BitcoinRelayProgress {
     IDLE,
+    REQUESTING_GATEWAY,
+    QUEUED,
     SENDING,
     WAITING_FOR_GATEWAY,
     BROADCAST,
@@ -108,6 +110,15 @@ enum class BitcoinRelayProgress {
 
 sealed interface BitcoinReply {
     val session: String
+
+    data class SlotReady(
+        override val session: String,
+    ) : BitcoinReply
+
+    data class Queued(
+        override val session: String,
+        val position: Int,
+    ) : BitcoinReply
 
     data class ChunkAcknowledged(
         override val session: String,
@@ -121,6 +132,12 @@ sealed interface BitcoinReply {
 
     data class Confirmed(
         override val session: String,
+        val blockHeight: Int,
+    ) : BitcoinReply
+
+    data class Result(
+        override val session: String,
+        val txid: String,
         val blockHeight: Int,
     ) : BitcoinReply
 
@@ -196,6 +213,8 @@ data class MeshDemoState(
         get() = stationRole != null && isConnected && isGatewayAvailable
     val isBitcoinRelayActive: Boolean
         get() = bitcoinRelayProgress in setOf(
+            BitcoinRelayProgress.REQUESTING_GATEWAY,
+            BitcoinRelayProgress.QUEUED,
             BitcoinRelayProgress.SENDING,
             BitcoinRelayProgress.WAITING_FOR_GATEWAY,
             BitcoinRelayProgress.BROADCAST,
@@ -403,22 +422,66 @@ internal fun bitcoinChunkFrame(
     }
 }
 
+internal fun bitcoinBeginFrame(session: String, total: Int): String {
+    require(Regex("^[A-Za-z0-9_-]{1,24}$").matches(session))
+    require(total > 0)
+    return "BTC_BEGIN|$session|$total".also {
+        require(it.encodeToByteArray().size <= MAX_TEXT_BYTES)
+    }
+}
+
+internal fun bitcoinResultAcknowledgementFrame(session: String): String {
+    require(Regex("^[A-Za-z0-9_-]{1,24}$").matches(session))
+    return "BTC_RESULT_ACK|$session"
+}
+
 internal fun parseBitcoinReply(text: String): BitcoinReply? {
     val parts = text.trim().split('|')
-    if (parts.size != 3) return null
+    if (parts.size !in 2..4) return null
     val session = parts[1].takeIf { Regex("^[A-Za-z0-9_-]{1,24}$").matches(it) } ?: return null
     return when (parts[0]) {
-        "BTC_CHUNK_ACK" -> parts[2].toIntOrNull()?.takeIf { it > 0 }?.let {
-            BitcoinReply.ChunkAcknowledged(session, it)
+        "BTC_READY" -> if (parts.size == 2) BitcoinReply.SlotReady(session) else null
+        "BTC_QUEUED" -> if (parts.size == 3) {
+            parts[2].toIntOrNull()?.takeIf { it > 0 }?.let { BitcoinReply.Queued(session, it) }
+        } else {
+            null
         }
-        "BTC_ACK" -> parts[2].takeIf { Regex("^[0-9A-Fa-f]{64}$").matches(it) }?.let {
-            BitcoinReply.Broadcast(session, it.lowercase())
+        "BTC_CHUNK_ACK" -> if (parts.size == 3) {
+            parts[2].toIntOrNull()?.takeIf { it > 0 }?.let {
+                BitcoinReply.ChunkAcknowledged(session, it)
+            }
+        } else {
+            null
         }
-        "BTC_CONF" -> parts[2].toIntOrNull()?.takeIf { it >= 0 }?.let {
-            BitcoinReply.Confirmed(session, it)
+        "BTC_ACK" -> if (parts.size == 3) {
+            parts[2].takeIf { Regex("^[0-9A-Fa-f]{64}$").matches(it) }?.let {
+                BitcoinReply.Broadcast(session, it.lowercase())
+            }
+        } else {
+            null
         }
-        "BTC_NACK" -> parts[2].takeIf(String::isNotBlank)?.let {
-            BitcoinReply.Rejected(session, it)
+        "BTC_CONF" -> if (parts.size == 3) {
+            parts[2].toIntOrNull()?.takeIf { it >= 0 }?.let {
+                BitcoinReply.Confirmed(session, it)
+            }
+        } else {
+            null
+        }
+        "BTC_RESULT" -> if (parts.size == 4) {
+            val txid = parts[2].takeIf { Regex("^[0-9A-Fa-f]{64}$").matches(it) }
+            val blockHeight = parts[3].toIntOrNull()?.takeIf { it >= 0 }
+            if (txid != null && blockHeight != null) {
+                BitcoinReply.Result(session, txid.lowercase(), blockHeight)
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+        "BTC_NACK" -> if (parts.size == 3) {
+            parts[2].takeIf(String::isNotBlank)?.let { BitcoinReply.Rejected(session, it) }
+        } else {
+            null
         }
         else -> null
     }

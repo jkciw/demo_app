@@ -45,6 +45,7 @@ import org.meshtastic.sdk.storage.sqldelight.SqlDelightStorageProvider
 import org.meshtastic.sdk.textMessages
 import org.meshtastic.sdk.transport.ble.BleConstants
 import org.meshtastic.sdk.transport.ble.BleTransport
+import kotlin.random.Random
 
 class MeshtasticSession(
     private val application: Application,
@@ -763,8 +764,62 @@ class MeshtasticSession(
                     bitcoinBlockHeight = null,
                 )
             }
+            stopPresenceLoop()
 
             try {
+                var slotReady = false
+                var queuedForSlot = false
+                for (attempt in 1..BITCOIN_SLOT_ATTEMPTS) {
+                    if (attempt > 1) {
+                        delay(Random.nextLong(BITCOIN_SLOT_RETRY_MIN_MS, BITCOIN_SLOT_RETRY_MAX_MS + 1))
+                    }
+                    _state.update {
+                        it.copy(
+                            bitcoinRelayProgress = if (queuedForSlot) {
+                                BitcoinRelayProgress.QUEUED
+                            } else {
+                                BitcoinRelayProgress.REQUESTING_GATEWAY
+                            },
+                            bitcoinStatusText = if (queuedForSlot) {
+                                "Gateway busy · waiting for this transaction's turn"
+                            } else if (attempt == 1) {
+                                "Requesting the Gateway upload slot"
+                            } else {
+                                "Retrying Gateway slot request · attempt $attempt"
+                            },
+                        )
+                    }
+                    val beginFrame = bitcoinBeginFrame(session, chunks.size)
+                    val handle = radioClient.sendText(
+                        text = beginFrame,
+                        to = NodeId.BROADCAST,
+                        channel = ChannelIndex(0),
+                    )
+                    Log.i(TAG, "Bitcoin session=$session slot request packet=${handle.id} attempt=$attempt")
+                    val reply = awaitSlotReply(session, acceptQueued = !queuedForSlot)
+                    when (reply) {
+                        is BitcoinReply.SlotReady -> {
+                            slotReady = true
+                            break
+                        }
+                        is BitcoinReply.Queued -> {
+                            queuedForSlot = true
+                            _state.update {
+                                it.copy(
+                                    bitcoinRelayProgress = BitcoinRelayProgress.QUEUED,
+                                    bitcoinStatusText = "Gateway busy · queue position ${reply.position}",
+                                )
+                            }
+                        }
+                        is BitcoinReply.Rejected -> throw BitcoinRelayException(reply.reason)
+                        null -> Unit
+                        else -> Unit
+                    }
+                }
+                if (!slotReady) {
+                    throw BitcoinRelayException("Gateway did not grant an upload slot")
+                }
+
                 chunks.forEachIndexed { zeroBasedIndex, payload ->
                     val chunkIndex = zeroBasedIndex + 1
                     val frame = bitcoinChunkFrame(session, chunkIndex, chunks.size, payload)
@@ -831,17 +886,19 @@ class MeshtasticSession(
                         bitcoinStatusText = "Transaction received by laptop · waiting for Bitcoin Core",
                     )
                 }
-                val broadcast = awaitFinalReply<BitcoinReply.Broadcast>(session)
-                    ?: throw BitcoinRelayException("Laptop did not return a transaction ID")
-                _state.update {
-                    it.copy(
-                        bitcoinRelayProgress = BitcoinRelayProgress.BROADCAST,
-                        bitcoinStatusText = "Broadcast accepted · mining confirmation",
-                        bitcoinTxid = broadcast.txid,
+                val result = awaitFinalReply<BitcoinReply.Result>(session)
+                    ?: throw BitcoinRelayException("Laptop did not return the confirmed transaction result")
+
+                runCatching {
+                    radioClient.sendText(
+                        text = bitcoinResultAcknowledgementFrame(session),
+                        to = NodeId.BROADCAST,
+                        channel = ChannelIndex(0),
                     )
+                }.onFailure { exception ->
+                    if (exception is CancellationException) throw exception
+                    Log.w(TAG, "Could not acknowledge Bitcoin result session=$session", exception)
                 }
-                val confirmation = awaitFinalReply<BitcoinReply.Confirmed>(session)
-                    ?: throw BitcoinRelayException("Laptop did not return a block confirmation")
 
                 val nextIndex = queueIndex + 1
                 preferences.edit().putInt(nextTransactionPreferenceKey(role), nextIndex).apply()
@@ -849,11 +906,14 @@ class MeshtasticSession(
                     it.copy(
                         bitcoinQueueIndex = nextIndex,
                         bitcoinRelayProgress = BitcoinRelayProgress.CONFIRMED,
-                        bitcoinStatusText = "Confirmed in Regtest block ${confirmation.blockHeight}",
-                        bitcoinBlockHeight = confirmation.blockHeight,
+                        bitcoinStatusText = "Confirmed in Regtest block ${result.blockHeight}",
+                        bitcoinTxid = result.txid,
+                        bitcoinBlockHeight = result.blockHeight,
                     )
                 }
-                Log.i(TAG, "Bitcoin session=$session confirmed txid=${broadcast.txid} height=${confirmation.blockHeight}")
+                Log.i(TAG, "Bitcoin session=$session confirmed txid=${result.txid} height=${result.blockHeight}")
+            } catch (exception: CancellationException) {
+                throw exception
             } catch (exception: BitcoinRelayException) {
                 Log.e(TAG, "Bitcoin relay failed session=$session", exception)
                 _state.update {
@@ -869,6 +929,10 @@ class MeshtasticSession(
                         bitcoinRelayProgress = BitcoinRelayProgress.FAILED,
                         bitcoinStatusText = exception.message ?: "Transaction relay failed",
                     )
+                }
+            } finally {
+                if (client === radioClient && _state.value.isConnected) {
+                    startPresenceLoop(radioClient, initialDelayMs = PRESENCE_INTERVAL_MS)
                 }
             }
         }
@@ -1117,12 +1181,15 @@ class MeshtasticSession(
         }
     }
 
-    private fun startPresenceLoop(radioClient: RadioClient) {
+    private fun startPresenceLoop(
+        radioClient: RadioClient,
+        initialDelayMs: Long = PRESENCE_INITIAL_DELAY_MS,
+    ) {
         if (presenceJob?.isActive == true && client === radioClient) return
         stopPresenceLoop()
         presenceJob = scope.launch {
             val stationOffset = (_state.value.stationRole?.ordinal ?: 0) * PRESENCE_STATION_OFFSET_MS
-            delay(PRESENCE_INITIAL_DELAY_MS + stationOffset)
+            delay(initialDelayMs + stationOffset)
             if (client !== radioClient || !_state.value.isConnected) return@launch
             sendPresence(radioClient)
             while (client === radioClient && _state.value.isConnected) {
@@ -1263,6 +1330,17 @@ class MeshtasticSession(
             }
         }
 
+    private suspend fun awaitSlotReply(session: String, acceptQueued: Boolean): BitcoinReply? =
+        withTimeoutOrNull(BITCOIN_SLOT_REPLY_TIMEOUT_MS) {
+            bitcoinReplies.first { reply ->
+                reply.session == session && (
+                    reply is BitcoinReply.SlotReady ||
+                        reply is BitcoinReply.Rejected ||
+                        acceptQueued && reply is BitcoinReply.Queued
+                    )
+            }
+        }
+
     private suspend inline fun <reified T : BitcoinReply> awaitFinalReply(session: String): T? {
         val reply = withTimeoutOrNull(BITCOIN_FINAL_TIMEOUT_MS) {
             bitcoinReplies.first {
@@ -1304,9 +1382,13 @@ class MeshtasticSession(
         const val BLE_SCAN_FEEDBACK_MS = 650L
         const val BLE_DISCONNECT_TIMEOUT_MS = 2_000L
         const val BITCOIN_CHUNK_ATTEMPTS = 3
+        const val BITCOIN_SLOT_ATTEMPTS = 12
+        const val BITCOIN_SLOT_REPLY_TIMEOUT_MS = 45_000L
+        const val BITCOIN_SLOT_RETRY_MIN_MS = 2_000L
+        const val BITCOIN_SLOT_RETRY_MAX_MS = 6_000L
         const val BITCOIN_RADIO_SEND_TIMEOUT_MS = 10_000L
         const val BITCOIN_CHUNK_TIMEOUT_MS = 30_000L
-        const val BITCOIN_FINAL_TIMEOUT_MS = 60_000L
+        const val BITCOIN_FINAL_TIMEOUT_MS = 150_000L
         const val RECOVERY_INITIAL_DELAY_MS = 1_000L
         const val RECOVERY_MAX_DELAY_MS = 15_000L
         const val PRESENCE_INITIAL_DELAY_MS = 5_000L

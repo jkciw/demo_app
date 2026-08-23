@@ -47,15 +47,24 @@ dd { margin:0; font:700 12px var(--font-geist-mono),monospace; }
 .transaction-panel { overflow:hidden; }
 .transaction-heading { display:flex; justify-content:space-between; align-items:end; padding:21px 24px; border-bottom:1px solid var(--line); }
 .transaction-heading h2 { margin:0; font-size:20px; }
+.gateway-slot-summary { display:grid; justify-items:end; gap:5px; }
+.gateway-slot-summary span { padding:6px 9px; border-radius:6px; font:700 9px var(--font-geist-mono),monospace; letter-spacing:.08em; }
+.gateway-slot-summary span.active { color:var(--amber); background:rgba(255,189,89,.1); }
+.gateway-slot-summary span.available { color:var(--green); background:rgba(86,242,170,.1); }
+.gateway-slot-summary small { color:var(--muted); font:9px var(--font-geist-mono),monospace; }
 .transaction-stream { display:grid; gap:10px; padding:14px; }
 .transaction-empty { padding:28px; border:1px dashed var(--line); border-radius:11px; color:var(--muted); text-align:center; font-size:13px; }
 .transaction-row { padding:15px 16px; border:1px solid var(--line); border-radius:11px; background:rgba(255,255,255,.02); }
 .transaction-row.confirmed { border-color:rgba(86,242,170,.4); background:rgba(86,242,170,.04); }
+.transaction-row.queued { border-style:dashed; }
+.transaction-row.reserved { border-color:rgba(112,200,255,.35); background:rgba(112,200,255,.04); }
 .transaction-row.error { border-color:rgba(255,105,105,.35); }
 .transaction-topline { display:flex; align-items:center; gap:10px; }
 .transaction-topline strong { font-size:14px; }
 .transaction-topline code { color:var(--muted); font:10px var(--font-geist-mono),monospace; }
 .transaction-status { margin-left:auto; padding:5px 7px; border-radius:5px; font:700 9px var(--font-geist-mono),monospace; letter-spacing:.08em; }
+.transaction-status.queued { color:var(--muted); background:rgba(125,155,146,.1); }
+.transaction-status.reserved { color:var(--blue); background:rgba(112,200,255,.1); }
 .transaction-status.receiving,.transaction-status.broadcasting,.transaction-status.mining { color:var(--amber); background:rgba(255,189,89,.1); }
 .transaction-status.confirmed { color:var(--green); background:rgba(86,242,170,.1); }
 .transaction-status.error { color:#ff8383; background:rgba(255,105,105,.12); }

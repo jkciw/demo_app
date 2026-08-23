@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,9 +16,13 @@ from typing import Any, Callable, Protocol
 
 
 FRAME_PREFIX = "BTC_TX"
+BEGIN_PREFIX = "BTC_BEGIN"
+RESULT_ACK_PREFIX = "BTC_RESULT_ACK"
 MAX_CHUNKS = 512
 MAX_TRANSACTION_BYTES = 100_000
 SESSION_TTL_SECONDS = 10 * 60
+ACTIVE_SLOT_IDLE_SECONDS = 75
+RESULT_REPEAT_COUNT = 3
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
 POSITION_PATTERN = re.compile(r"^(\d+)/(\d+)$")
 HEX_PATTERN = re.compile(r"^[0-9A-Fa-f]+$")
@@ -63,6 +68,26 @@ class ChunkFrame:
     payload: str
 
 
+@dataclass(frozen=True)
+class BeginFrame:
+    session: str
+    total: int
+
+
+@dataclass
+class Admission:
+    source_id: str
+    sender: str
+    session: str
+    total: int
+    channel: int
+    updated_at: float = field(default_factory=time.monotonic)
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.source_id, self.session)
+
+
 @dataclass
 class IncomingTransaction:
     source_id: str
@@ -100,6 +125,22 @@ def parse_chunk_frame(text: str) -> ChunkFrame:
     if len(payload) // 2 > MAX_TRANSACTION_BYTES:
         raise ValueError("too-large")
     return ChunkFrame(session=session, index=index, total=total, payload=payload.lower())
+
+
+def parse_begin_frame(text: str) -> BeginFrame:
+    parts = text.strip().split("|")
+    if len(parts) != 3 or parts[0] != BEGIN_PREFIX:
+        raise ValueError("bad-frame")
+    session = parts[1]
+    if not SESSION_PATTERN.fullmatch(session):
+        raise ValueError("bad-session")
+    try:
+        total = int(parts[2])
+    except ValueError as error:
+        raise ValueError("bad-total") from error
+    if total < 1 or total > MAX_CHUNKS:
+        raise ValueError("bad-total")
+    return BeginFrame(session=session, total=total)
 
 
 class BitcoinRegtest:
@@ -187,7 +228,7 @@ class BitcoinRegtest:
 
 
 class BitcoinTransactionBridge:
-    """Consumes BTC_TX frames and sends application-level results to the phone."""
+    """Serializes phone uploads, reassembles BTC_TX frames, and relays them to Regtest."""
 
     def __init__(
         self,
@@ -207,6 +248,14 @@ class BitcoinTransactionBridge:
         self._lock = threading.RLock()
         self._incoming: dict[tuple[str, str], IncomingTransaction] = {}
         self._completed: dict[tuple[str, str], CompletedTransaction] = {}
+        self._admissions: dict[tuple[str, str], Admission] = {}
+        self._active: Admission | None = None
+        self._queued: deque[Admission] = deque()
+
+    @property
+    def has_active_transfer(self) -> bool:
+        with self._lock:
+            return self._active is not None
 
     def close(self) -> None:
         if self._owns_executor:
@@ -219,11 +268,16 @@ class BitcoinTransactionBridge:
         sender: str,
         channel: int = 0,
     ) -> bool:
-        if not text.strip().startswith(f"{FRAME_PREFIX}|"):
+        stripped = text.strip()
+        if stripped.startswith(f"{BEGIN_PREFIX}|"):
+            return self._handle_begin(stripped, source_id, sender, channel)
+        if stripped.startswith(f"{RESULT_ACK_PREFIX}|"):
+            return self._handle_result_ack(stripped, source_id)
+        if not stripped.startswith(f"{FRAME_PREFIX}|"):
             return False
         session_hint = self._session_hint(text)
         try:
-            frame = parse_chunk_frame(text)
+            frame = parse_chunk_frame(stripped)
         except ValueError as error:
             self._safe_reply(f"BTC_NACK|{session_hint}|{error}", source_id, channel)
             self.sink.upsert_transaction(
@@ -242,8 +296,34 @@ class BitcoinTransactionBridge:
         completed: CompletedTransaction | None = None
         raw_hex: str | None = None
         with self._lock:
-            self._expire_sessions()
+            self._expire_sessions_locked()
             completed = self._completed.get(key)
+            if completed is not None:
+                self._safe_reply(f"BTC_CHUNK_ACK|{frame.session}|{frame.index}", source_id, channel)
+                self._send_completed(frame.session, completed, source_id, channel)
+                return True
+
+            admission = self._admissions.get(key)
+            if admission is None:
+                admission = Admission(
+                    source_id, sender, frame.session, frame.total, channel, self.clock()
+                )
+                self._admissions[key] = admission
+                if self._active is None:
+                    self._activate_locked(admission)
+                else:
+                    self._queued.append(admission)
+                    self._refresh_queue_positions_locked()
+            else:
+                admission.updated_at = self.clock()
+
+            if self._active is None or self._active.key != key:
+                self._send_queue_position_locked(admission)
+                return True
+            if admission.total != frame.total:
+                self._fail_admission_locked(admission, "chunk-total-changed")
+                return True
+
             if completed is None:
                 incoming = self._incoming.get(key)
                 if incoming is None:
@@ -256,11 +336,11 @@ class BitcoinTransactionBridge:
                     )
                     self._incoming[key] = incoming
                 if incoming.total != frame.total:
-                    self._reject(incoming, "chunk-total-changed")
+                    self._reject_locked(incoming, "chunk-total-changed")
                     return True
                 existing = incoming.chunks.get(frame.index)
                 if existing is not None and existing != frame.payload:
-                    self._reject(incoming, "chunk-conflict")
+                    self._reject_locked(incoming, "chunk-conflict")
                     return True
                 incoming.chunks[frame.index] = frame.payload
                 incoming.updated_at = self.clock()
@@ -269,16 +349,16 @@ class BitcoinTransactionBridge:
                     self._view(incoming, status="receiving", chunks_received=received)
                 )
                 if received == incoming.total:
-                    raw_hex = "".join(incoming.chunks[index] for index in range(1, incoming.total + 1))
+                    raw_hex = "".join(
+                        incoming.chunks[index] for index in range(1, incoming.total + 1)
+                    )
                     if len(raw_hex) // 2 > MAX_TRANSACTION_BYTES:
-                        self._reject(incoming, "too-large")
+                        self._reject_locked(incoming, "too-large")
                         return True
                     del self._incoming[key]
 
         self._safe_reply(f"BTC_CHUNK_ACK|{frame.session}|{frame.index}", source_id, channel)
-        if completed is not None:
-            self._send_completed(frame.session, completed, source_id, channel)
-        elif raw_hex is not None:
+        if raw_hex is not None:
             self.sink.upsert_transaction(
                 {
                     "id": f"{source_id}:{frame.session}",
@@ -312,7 +392,6 @@ class BitcoinTransactionBridge:
         source_id, session = key
         try:
             txid = self.rpc.broadcast(raw_hex)
-            self._safe_reply(f"BTC_ACK|{session}|{txid}", source_id, channel)
             self.sink.upsert_transaction(
                 {
                     "id": f"{source_id}:{session}",
@@ -343,9 +422,12 @@ class BitcoinTransactionBridge:
                     "sizeBytes": len(raw_hex) // 2,
                     "txid": txid,
                     "blockHeight": block_height,
+                    "resultAcknowledged": False,
                 }
             )
-            self._safe_reply(f"BTC_CONF|{session}|{block_height}", source_id, channel)
+            self._send_completed(session, completed, source_id, channel)
+            with self._lock:
+                self._finish_active_locked(key)
         except Exception as error:
             detail = self._error_code(error)
             print(
@@ -365,6 +447,8 @@ class BitcoinTransactionBridge:
                 }
             )
             self._safe_reply(f"BTC_NACK|{session}|{detail}", source_id, channel)
+            with self._lock:
+                self._finish_active_locked(key)
 
     def _send_completed(
         self,
@@ -373,10 +457,11 @@ class BitcoinTransactionBridge:
         source_id: str,
         channel: int,
     ) -> None:
-        self._safe_reply(f"BTC_ACK|{session}|{completed.txid}", source_id, channel)
-        self._safe_reply(f"BTC_CONF|{session}|{completed.block_height}", source_id, channel)
+        frame = f"BTC_RESULT|{session}|{completed.txid}|{completed.block_height}"
+        for _ in range(RESULT_REPEAT_COUNT):
+            self._safe_reply(frame, source_id, channel)
 
-    def _reject(self, incoming: IncomingTransaction, reason: str) -> None:
+    def _reject_locked(self, incoming: IncomingTransaction, reason: str) -> None:
         key = (incoming.source_id, incoming.session)
         self._incoming.pop(key, None)
         self.sink.upsert_transaction(
@@ -388,6 +473,150 @@ class BitcoinTransactionBridge:
         self._safe_reply(
             f"BTC_NACK|{incoming.session}|{reason}", incoming.source_id, incoming.channel
         )
+        self._finish_active_locked(key)
+
+    def _handle_begin(self, text: str, source_id: str, sender: str, channel: int) -> bool:
+        session_hint = self._session_hint(text)
+        try:
+            frame = parse_begin_frame(text)
+        except ValueError as error:
+            self._safe_reply(f"BTC_NACK|{session_hint}|{error}", source_id, channel)
+            return True
+
+        key = (source_id, frame.session)
+        with self._lock:
+            self._expire_sessions_locked()
+            completed = self._completed.get(key)
+            if completed is not None:
+                self._send_completed(frame.session, completed, source_id, channel)
+                return True
+
+            existing = self._admissions.get(key)
+            if existing is not None:
+                existing.updated_at = self.clock()
+                if existing.total != frame.total:
+                    self._fail_admission_locked(existing, "chunk-total-changed")
+                elif self._active is not None and self._active.key == key:
+                    self._safe_reply(f"BTC_READY|{frame.session}", source_id, channel)
+                else:
+                    self._send_queue_position_locked(existing)
+                return True
+
+            admission = Admission(
+                source_id, sender, frame.session, frame.total, channel, self.clock()
+            )
+            self._admissions[key] = admission
+            if self._active is None:
+                self._activate_locked(admission)
+            else:
+                self._queued.append(admission)
+                self._refresh_queue_positions_locked()
+                self._send_queue_position_locked(admission)
+            return True
+
+    def _handle_result_ack(self, text: str, source_id: str) -> bool:
+        parts = text.split("|")
+        if len(parts) != 2 or not SESSION_PATTERN.fullmatch(parts[1]):
+            return True
+        key = (source_id, parts[1])
+        with self._lock:
+            completed = self._completed.get(key)
+            if completed is None:
+                return True
+            self.sink.upsert_transaction(
+                {
+                    "id": f"{source_id}:{parts[1]}",
+                    "session": parts[1],
+                    "sourceId": source_id,
+                    "status": "confirmed",
+                    "resultAcknowledged": True,
+                }
+            )
+        return True
+
+    def _activate_locked(self, admission: Admission) -> None:
+        self._active = admission
+        admission.updated_at = self.clock()
+        self.sink.upsert_transaction(
+            {
+                "id": f"{admission.source_id}:{admission.session}",
+                "session": admission.session,
+                "sender": admission.sender,
+                "sourceId": admission.source_id,
+                "status": "reserved",
+                "chunksReceived": 0,
+                "chunksTotal": admission.total,
+                "queuePosition": 0,
+            }
+        )
+        self._safe_reply(f"BTC_READY|{admission.session}", admission.source_id, admission.channel)
+
+    def _send_queue_position_locked(self, admission: Admission) -> None:
+        try:
+            position = next(
+                index
+                for index, item in enumerate(self._queued, start=1)
+                if item.key == admission.key
+            )
+        except StopIteration:
+            position = 1
+        self._safe_reply(
+            f"BTC_QUEUED|{admission.session}|{position}",
+            admission.source_id,
+            admission.channel,
+        )
+
+    def _refresh_queue_positions_locked(self) -> None:
+        for position, admission in enumerate(self._queued, start=1):
+            self.sink.upsert_transaction(
+                {
+                    "id": f"{admission.source_id}:{admission.session}",
+                    "session": admission.session,
+                    "sender": admission.sender,
+                    "sourceId": admission.source_id,
+                    "status": "queued",
+                    "chunksReceived": 0,
+                    "chunksTotal": admission.total,
+                    "queuePosition": position,
+                }
+            )
+
+    def _finish_active_locked(self, key: tuple[str, str]) -> None:
+        self._incoming.pop(key, None)
+        self._admissions.pop(key, None)
+        if self._active is None or self._active.key != key:
+            self._refresh_queue_positions_locked()
+            return
+        self._active = None
+        while self._queued:
+            candidate = self._queued.popleft()
+            if candidate.key in self._admissions:
+                self._activate_locked(candidate)
+                break
+        self._refresh_queue_positions_locked()
+
+    def _fail_admission_locked(self, admission: Admission, reason: str) -> None:
+        self.sink.upsert_transaction(
+            {
+                "id": f"{admission.source_id}:{admission.session}",
+                "session": admission.session,
+                "sender": admission.sender,
+                "sourceId": admission.source_id,
+                "status": "error",
+                "error": reason,
+            }
+        )
+        self._safe_reply(
+            f"BTC_NACK|{admission.session}|{reason}",
+            admission.source_id,
+            admission.channel,
+        )
+        if self._active is not None and self._active.key == admission.key:
+            self._finish_active_locked(admission.key)
+        else:
+            self._admissions.pop(admission.key, None)
+            self._queued = deque(item for item in self._queued if item.key != admission.key)
+            self._refresh_queue_positions_locked()
 
     def _view(
         self,
@@ -406,17 +635,15 @@ class BitcoinTransactionBridge:
             "chunksTotal": incoming.total,
         }
 
-    def _expire_sessions(self) -> None:
-        cutoff = self.clock() - SESSION_TTL_SECONDS
-        expired = [key for key, value in self._incoming.items() if value.updated_at < cutoff]
-        for key in expired:
-            incoming = self._incoming.pop(key)
-            self.sink.upsert_transaction(
-                {
-                    **self._view(incoming, status="error", chunks_received=len(incoming.chunks)),
-                    "error": "transfer-timeout",
-                }
-            )
+    def _expire_sessions_locked(self) -> None:
+        now = self.clock()
+        if self._active is not None and self._active.updated_at < now - ACTIVE_SLOT_IDLE_SECONDS:
+            self._fail_admission_locked(self._active, "slot-timeout")
+
+        queue_cutoff = now - SESSION_TTL_SECONDS
+        expired = [item for item in self._queued if item.updated_at < queue_cutoff]
+        for admission in expired:
+            self._fail_admission_locked(admission, "queue-timeout")
 
     def _safe_reply(self, text: str, destination: str, channel: int) -> None:
         try:

@@ -83,18 +83,29 @@ The universal APK packages independent Alice and Bob Regtest transaction queues 
 runtime station role chooses the queue. The current Stage 3 development build contains two
 transactions per station. Each line is one complete signed raw transaction hex.
 
-On the home screen, **RELAY NEXT SIGNED TRANSACTION** broadcasts the current transaction on the
-proven primary-channel path. The laptop-connected Gateway consumes the protocol frames and
-broadcasts session-specific acknowledgements on that same channel. Other participant phones hide
-these frames from their chat inbox. The app splits the hex into conservative 100-character chunks and uses:
+On the home screen, **RELAY NEXT SIGNED TRANSACTION** first requests the Gateway's single upload
+slot. If Alice and Bob request it together, the first decoded request becomes active and the other
+phone shows its FIFO queue position. Only the active phone transmits chunks; the queued phone starts
+automatically after the Gateway grants its turn. Other participant phones hide these frames from
+their chat inbox.
+
+```text
+BTC_BEGIN|<session>|<total-chunks>
+BTC_READY|<session>
+BTC_QUEUED|<session>|<position>
+```
+
+The app then splits the hex into conservative 100-character chunks and uses:
 
 ```text
 BTC_TX|<session>|<chunk>/<total>|<hex>
 ```
 
-It waits for `BTC_CHUNK_ACK` before sending the next chunk, retries an unacknowledged chunk up to
-three times, then waits for `BTC_ACK` and `BTC_CONF`. The queue advances only after confirmation.
-The current queue index is stored locally, so closing the app does not skip a transaction.
+It waits for `BTC_CHUNK_ACK` before sending the next chunk and retries an unacknowledged chunk up to
+three times. After Bitcoin Core accepts and confirms the transaction, the Gateway repeats one
+combined `BTC_RESULT|<session>|<txid>|<block-height>` frame three times. The phone replies with
+`BTC_RESULT_ACK|<session>` and advances its local queue only after receiving the result. Presence
+announcements pause during an active relay, and a stalled upload releases its slot after 75 seconds.
 
 Start the laptop dashboard before relaying:
 

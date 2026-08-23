@@ -36,13 +36,15 @@ type BitcoinTransaction = {
   session: string;
   sender: string;
   sourceId: string;
-  status: "receiving" | "broadcasting" | "mining" | "confirmed" | "error";
+  status: "queued" | "reserved" | "receiving" | "broadcasting" | "mining" | "confirmed" | "error";
+  queuePosition?: number;
   chunksReceived?: number;
   chunksTotal?: number;
   sizeBytes?: number;
   txid?: string;
   blockHeight?: number;
   error?: string;
+  resultAcknowledged?: boolean;
   receivedAt: string;
   updatedAt: string;
 };
@@ -138,6 +140,10 @@ export default function Home() {
   const meshtastic = snapshot.transports.meshtastic;
   const reticulum = snapshot.transports.reticulum;
   const bitcoin = snapshot.bitcoin ?? emptySnapshot.bitcoin;
+  const activeTransaction = transactions.find((transaction) =>
+    ["reserved", "receiving", "broadcasting", "mining"].includes(transaction.status),
+  );
+  const queuedTransactions = transactions.filter((transaction) => transaction.status === "queued");
 
   async function copyDestination() {
     if (!reticulum.destinationHash) return;
@@ -204,12 +210,17 @@ export default function Home() {
         <section className="transaction-panel">
           <div className="transaction-heading">
             <div><p className="section-label">BITCOIN / REGTEST</p><h2>Transaction relay</h2></div>
-            <p className="message-count">{transactions.length} transfer{transactions.length === 1 ? "" : "s"}</p>
+            <div className="gateway-slot-summary">
+              <span className={activeTransaction ? "active" : "available"}>
+                {activeTransaction ? `ACTIVE · ${activeTransaction.sender}` : "SLOT AVAILABLE"}
+              </span>
+              <small>{queuedTransactions.length} queued</small>
+            </div>
           </div>
           <div className="transaction-stream" aria-live="polite">
             {transactions.length === 0 && (
               <div className="transaction-empty">
-                Waiting for a signed transaction from Alpha or Bravo.
+                Waiting for a signed transaction from Alice or Bob.
               </div>
             )}
             {transactions.map((transaction) => {
@@ -228,8 +239,14 @@ export default function Home() {
                   </div>
                   <div className="transaction-detail">
                     <span>{received}/{total} CHUNKS</span>
+                    {transaction.queuePosition != null && transaction.queuePosition > 0 && (
+                      <span>QUEUE POSITION {transaction.queuePosition}</span>
+                    )}
                     {transaction.sizeBytes != null && <span>{transaction.sizeBytes} BYTES</span>}
                     {transaction.blockHeight != null && <span>BLOCK {transaction.blockHeight}</span>}
+                    {transaction.status === "confirmed" && (
+                      <span>{transaction.resultAcknowledged ? "PHONE RECEIVED RESULT" : "AWAITING PHONE ACK"}</span>
+                    )}
                     {transaction.error && <span className="transaction-error">{transaction.error}</span>}
                   </div>
                   {transaction.txid && <code className="transaction-txid">TXID {transaction.txid}</code>}
