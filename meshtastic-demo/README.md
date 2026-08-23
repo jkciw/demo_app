@@ -73,7 +73,7 @@ runtime station role chooses the queue. The current Stage 3 development build co
 transactions per station. Each line is one complete signed raw transaction hex.
 
 On the home screen, **RELAY NEXT SIGNED TRANSACTION** broadcasts the current transaction on the
-proven primary-channel path. Laptop Meshtastic node `!2303a141` consumes the protocol frames and
+proven primary-channel path. The laptop-connected Gateway consumes the protocol frames and
 broadcasts session-specific acknowledgements on that same channel. Other participant phones hide
 these frames from their chat inbox. The app splits the hex into conservative 100-character chunks and uses:
 
@@ -88,7 +88,7 @@ The current queue index is stored locally, so closing the app does not skip a tr
 Start the laptop dashboard before relaying:
 
 ```shell
-cd /Users/balajic/Documents/HongKong/demo_app/laptop-dashboard
+cd demo_app/laptop-dashboard
 ./dashboardctl start
 ```
 

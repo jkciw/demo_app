@@ -6,7 +6,7 @@ messages from two independent USB serial radios.
 ## Start and stop
 
 ```sh
-cd /Users/balajic/Documents/HongKong/demo_app/laptop-dashboard
+cd demo_app/laptop-dashboard
 ./dashboardctl start
 ```
 

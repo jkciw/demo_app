@@ -58,8 +58,18 @@ Increment the tag for later checkpoints. Never move or replace a published check
 ## Remote APK builds
 
 The `Android APK` GitHub Actions workflow runs unit tests, lint, and the universal debug build on
-pull requests. Pushes to `main`, matching tags, and manual runs also publish a downloadable APK and
-SHA-256 file for 30 days.
+pull requests. Pushes to `main`, matching tags, and manual runs also retain a downloadable workflow
+artifact and SHA-256 file for 30 days. A successful push to `main` additionally creates a public
+GitHub Release, marks it as the latest release, and attaches the full APK under a stable filename:
+
+```text
+https://github.com/jkciw/demo_app/releases/latest/download/Meshtastic-Conference-Demo.apk
+```
+
+No manual copying or release upload is required. Each mainline Android change gets an immutable
+`meshtastic-build-<commit>` release tag, while the URL above always resolves to the newest successful
+release. A new phone installs the full APK; a phone carrying the same signing identity updates in
+place and preserves its app data.
 
 Mainline artifacts deliberately require the repository secret
 `ANDROID_DEBUG_KEYSTORE_BASE64`. It must contain the Mac's existing Android debug keystore so a

@@ -110,9 +110,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/conference-artifact
-          artifact="build/conference-artifact/Meshtastic-Conference-Demo-${GITHUB_SHA:0:12}.apk"
+          artifact="build/conference-artifact/Meshtastic-Conference-Demo.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "${artifact}"
-          sha256sum "${artifact}" > "${artifact}.sha256"
+          (
+            cd build/conference-artifact
+            sha256sum Meshtastic-Conference-Demo.apk > Meshtastic-Conference-Demo.apk.sha256
+          )
 
       - name: Upload universal APK
         if: github.event_name != 'pull_request'
@@ -125,3 +128,40 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 30
+
+  publish-release:
+    name: Publish public APK release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify-and-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified APK
+        uses: actions/download-artifact@v7
+        with:
+          name: meshtastic-conference-${{ github.ref_name }}-${{ github.sha }}
+          path: release
+
+      - name: Publish as the latest GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="meshtastic-build-${GITHUB_SHA:0:12}"
+          apk="release/Meshtastic-Conference-Demo.apk"
+          checksum="release/Meshtastic-Conference-Demo.apk.sha256"
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${apk}" "${checksum}" --clobber
+            gh release edit "${tag}" --latest
+          else
+            gh release create "${tag}" "${apk}" "${checksum}" \
+              --target "${GITHUB_SHA}" \
+              --title "Meshtastic Conference Demo ${GITHUB_SHA:0:12}" \
+              --generate-notes \
+              --latest
+          fi
+
+          echo "APK: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/Meshtastic-Conference-Demo.apk"
