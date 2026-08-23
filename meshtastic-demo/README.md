@@ -54,8 +54,16 @@ the operator must explicitly select a different paired radio before the existing
 the SDK declares an otherwise healthy idle BLE session stale, the service rebuilds the client with
 bounded backoff and completes a fresh handshake without reopening the app. If Android has removed
 the bond, retries stop and the app asks the operator to pair the radio again instead of repeatedly
-triggering pairing-code prompts. For the conference, also exempt the app from the phone's battery
-optimisation and keep the official Meshtastic app closed so only one phone app owns each radio.
+triggering pairing-code prompts. The BLE transport deliberately disables Android's persistent GATT
+auto-connect so it cannot bypass these bond checks. SDK 0.1.0's default fixed-nonce BLE heartbeat is
+disabled and replaced by a 20-second incrementing-nonce keepalive. This produces the firmware queue
+response needed by the SDK's liveness watchdog; disabling the SDK sender alone is insufficient
+because its watchdog continues running. A runtime bond observer stops recovery immediately if a
+radio rejects a stored bond. Only the operator's explicit **Reconnect attached radio** action may
+open one unbonded GATT session; this lets the Meshtastic PIN exchange finish inside the connection,
+as required by radios that cannot establish a durable bond from Android Settings alone. For the
+conference, also exempt the app from the phone's battery optimisation and keep the official
+Meshtastic app closed so only one phone app owns each radio.
 
 ## Hardware proof
 

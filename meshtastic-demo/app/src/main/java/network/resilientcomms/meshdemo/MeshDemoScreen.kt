@@ -744,7 +744,7 @@ private fun RadioReconnectScreen(
     Text("Reconnect attached radio", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black)
     Spacer(Modifier.height(7.dp))
     Text(
-        "The app is rebuilding the Bluetooth session without changing this phone’s identity or selected radio.",
+        "The app is rebuilding the Bluetooth session without changing this phone’s identity or selected radio. If needed, pairing happens once inside this connection.",
         color = Muted,
         lineHeight = 21.sp,
     )
@@ -806,7 +806,18 @@ private fun RadioReconnectScreen(
     Spacer(Modifier.height(16.dp))
     when {
         complete -> PrimaryButton("RETURN TO OPERATOR CONSOLE", onDone, enabled = true)
-        pairingRequired -> PrimaryButton("RETURN TO OPERATOR CONSOLE", onDone, enabled = true)
+        pairingRequired -> {
+            Text(
+                "Keep the attached radio awake, press the button below, then enter the PIN shown on its display. Automatic retries stay off if pairing fails.",
+                color = Muted,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(12.dp))
+            PrimaryButton("PAIR ATTACHED RADIO", onRetry, enabled = true)
+        }
         failed -> PrimaryButton("TRY RECONNECT AGAIN", onRetry, enabled = true)
         else -> Text(
             "You can use Back to return to the Operator Console while reconnection continues.",

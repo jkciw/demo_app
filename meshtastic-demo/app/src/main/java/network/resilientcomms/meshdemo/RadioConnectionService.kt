@@ -8,8 +8,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothDevice
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -33,6 +36,23 @@ class RadioConnectionService : Service() {
     private lateinit var demoApplication: MeshDemoApplication
     private lateinit var session: MeshtasticSession
     private var notificationJob: Job? = null
+    private var bondReceiverRegistered = false
+    private val bondStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
+            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+            } ?: return
+            session.onBondStateChanged(
+                address = device.address,
+                previousState = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.ERROR),
+                currentState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR),
+            )
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -41,6 +61,13 @@ class RadioConnectionService : Service() {
         startForeground(NOTIFICATION_ID, notification("Preparing the radio connection…"))
 
         session = MeshtasticSession(application, serviceScope)
+        ContextCompat.registerReceiver(
+            this,
+            bondStateReceiver,
+            IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED),
+            ContextCompat.RECEIVER_EXPORTED,
+        )
+        bondReceiverRegistered = true
         demoApplication.attachSession(session)
         notificationJob = session.state
             .onEach { state ->
@@ -58,6 +85,10 @@ class RadioConnectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        if (bondReceiverRegistered) {
+            unregisterReceiver(bondStateReceiver)
+            bondReceiverRegistered = false
+        }
         notificationJob?.cancel()
         demoApplication.detachSession(session)
         serviceScope.launch {
