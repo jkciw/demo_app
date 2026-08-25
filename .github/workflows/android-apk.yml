@@ -7,13 +7,24 @@ on:
       - "meshtastic-demo/**"
       - ".github/workflows/android-apk.yml"
   push:
-    branches: [main]
+    branches:
+      - main
+      - four-station-mesh
     tags:
       - "meshtastic-v*"
     paths:
       - "meshtastic-demo/**"
       - ".github/workflows/android-apk.yml"
   workflow_dispatch:
+    inputs:
+      release_channel:
+        description: Build only, or publish a public preview release
+        required: true
+        default: artifact
+        type: choice
+        options:
+          - artifact
+          - preview
 
 permissions:
   contents: read
@@ -186,3 +197,65 @@ jobs:
           fi
 
           echo "APK: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/Meshtastic-Conference-Demo.apk"
+
+  publish-preview:
+    name: Publish public preview APK
+    if: github.event_name == 'workflow_dispatch' && inputs.release_channel == 'preview'
+    needs: verify-and-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out preview release notes
+        uses: actions/checkout@v6
+
+      - name: Download verified APK
+        uses: actions/download-artifact@v7
+        with:
+          name: meshtastic-conference-${{ github.ref_name }}-${{ github.sha }}
+          path: release
+
+      - name: Publish branch build as a GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="$(
+            sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' \
+              meshtastic-demo/app/build.gradle.kts
+          )"
+          if [[ -z "${version}" ]]; then
+            echo "::error::Could not determine the Android versionName"
+            exit 1
+          fi
+          if [[ "${version}" != *-* ]]; then
+            echo "::error::Preview releases require a prerelease versionName such as 0.4.0-beta.1"
+            exit 1
+          fi
+
+          tag="meshtastic-preview-v${version}-${GITHUB_SHA:0:7}"
+          title="Meshtastic Conference Demo v${version} — four-station preview"
+          notes="meshtastic-demo/RELEASE_NOTES.md"
+          apk="release/Meshtastic-Conference-Demo.apk"
+          checksum="release/Meshtastic-Conference-Demo.apk.sha256"
+
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${apk}" "${checksum}" \
+              --clobber \
+              --repo "${GITHUB_REPOSITORY}"
+            gh release edit "${tag}" \
+              --title "${title}" \
+              --notes-file "${notes}" \
+              --prerelease \
+              --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create "${tag}" "${apk}" "${checksum}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "${title}" \
+              --notes-file "${notes}" \
+              --prerelease
+          fi
+
+          echo "Preview release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"

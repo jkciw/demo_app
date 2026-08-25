@@ -29,6 +29,11 @@ demo_app/
 └── README.md             Repository overview
 ```
 
+The optional four-phone, dual-receiver expansion is developed separately under
+the policy in [`docs/four-station-mesh.md`](docs/four-station-mesh.md). The
+stable `main` release is not replaced until the six-radio hardware acceptance
+gate passes.
+
 Project-specific setup and operating instructions live in each project's own
 `README.md`.
 
