@@ -29,8 +29,10 @@ test("server-renders the conference dashboard and Bitcoin relay", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Unified Message Console<\/title>/i);
-  assert.match(html, /RESILIENT COMMS \/ FIELD MONITOR/);
+  assert.match(html, /<title>Meshtastic Field Console<\/title>/i);
+  assert.match(html, /MESHTASTIC \/ FIELD MONITOR/);
+  assert.match(html, /MESHTASTIC LINK/);
+  assert.doesNotMatch(html, /Reticulum|LXMF|RNode/i);
   assert.match(html, /Transaction relay/);
   assert.match(html, /BITCOIN \/ REGTEST/);
   assert.match(html, /RPC port/);
@@ -47,6 +49,7 @@ test("client subscribes to collector snapshots and renders relay states", async 
   ]);
 
   assert.match(page, /new EventSource\(`\$\{SERVICE_URL\}\/api\/events`\)/);
+  assert.match(page, /message\.transport === "meshtastic"/);
   assert.match(page, /transaction\.status/);
   assert.match(page, /transaction\.txid/);
   assert.match(page, /transaction\.blockHeight/);

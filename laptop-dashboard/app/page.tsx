@@ -84,16 +84,14 @@ function formatTime(value: string) {
 
 function TransportCard({
   name,
-  mark,
   state,
 }: {
   name: string;
-  mark: "M" | "R";
   state: TransportState;
 }) {
   return (
     <article className={`transport-card ${state.status === "online" ? "active" : ""}`}>
-      <div className={`transport-mark ${mark === "R" ? "reticulum" : ""}`}>{mark}</div>
+      <div className="transport-mark">M</div>
       <div className="transport-copy">
         <h2>{name}</h2>
         <p>{state.port ?? state.detail}</p>
@@ -107,7 +105,6 @@ function TransportCard({
 export default function Home() {
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [serviceOnline, setServiceOnline] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -132,32 +129,27 @@ export default function Home() {
     };
   }, []);
 
-  const messages = useMemo(() => [...snapshot.messages].reverse(), [snapshot.messages]);
+  const messages = useMemo(
+    () => snapshot.messages.filter((message) => message.transport === "meshtastic").reverse(),
+    [snapshot.messages],
+  );
   const transactions = useMemo(
     () => [...(snapshot.transactions ?? [])].reverse(),
     [snapshot.transactions],
   );
   const meshtastic = snapshot.transports.meshtastic;
-  const reticulum = snapshot.transports.reticulum;
   const bitcoin = snapshot.bitcoin ?? emptySnapshot.bitcoin;
   const activeTransaction = transactions.find((transaction) =>
     ["reserved", "receiving", "broadcasting", "mining"].includes(transaction.status),
   );
   const queuedTransactions = transactions.filter((transaction) => transaction.status === "queued");
 
-  async function copyDestination() {
-    if (!reticulum.destinationHash) return;
-    await navigator.clipboard.writeText(reticulum.destinationHash);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
-  }
-
   return (
     <main className="dashboard-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">RESILIENT COMMS / FIELD MONITOR</p>
-          <h1>Unified Message Console</h1>
+          <p className="eyebrow">MESHTASTIC / FIELD MONITOR</p>
+          <h1>Meshtastic Field Console</h1>
         </div>
         <div className={`system-state ${serviceOnline ? "" : "disconnected"}`}>
           <span className="pulse" aria-hidden="true" />
@@ -167,17 +159,8 @@ export default function Home() {
 
       <section className="dashboard-grid">
         <aside className="transport-panel">
-          <p className="section-label">TRANSPORTS</p>
-          <TransportCard name="Meshtastic" mark="M" state={meshtastic} />
-          <TransportCard name="Reticulum / LXMF" mark="R" state={reticulum} />
-
-          {reticulum.destinationHash && (
-            <div className="destination-card">
-              <p className="section-label">LAPTOP LXMF DESTINATION</p>
-              <code>{reticulum.destinationHash}</code>
-              <button type="button" onClick={copyDestination}>{copied ? "COPIED" : "COPY ADDRESS"}</button>
-            </div>
-          )}
+          <p className="section-label">MESHTASTIC LINK</p>
+          <TransportCard name="Gateway radio" state={meshtastic} />
 
           <div className="network-summary">
             <p className="section-label">MESHTASTIC MESH</p>
@@ -200,10 +183,6 @@ export default function Home() {
             </dl>
             <small>{bitcoin.detail}</small>
           </div>
-
-          <p className="security-note">
-            LXMF is end-to-end encrypted. Only messages addressed or copied to this laptop destination appear here.
-          </p>
         </aside>
 
         <div className="content-stack">
@@ -258,7 +237,7 @@ export default function Home() {
 
         <section className="message-panel">
           <div className="message-heading">
-            <div><p className="section-label">LIVE TRAFFIC</p><h2>All messages</h2></div>
+            <div><p className="section-label">LIVE TRAFFIC</p><h2>Meshtastic messages</h2></div>
             <p className="message-count">{messages.length} {messages.length === 1 ? "packet" : "packets"} received</p>
           </div>
 
@@ -266,8 +245,8 @@ export default function Home() {
             {messages.length === 0 && (
               <div className="empty-state">
                 <div className="radar" aria-hidden="true"><span /></div>
-                <h3>Listening for field traffic</h3>
-                <p>Messages received by either connected radio will appear here automatically.</p>
+                <h3>Listening to the mesh</h3>
+                <p>Messages received by the Gateway radio will appear here automatically.</p>
               </div>
             )}
             {messages.map((message) => (

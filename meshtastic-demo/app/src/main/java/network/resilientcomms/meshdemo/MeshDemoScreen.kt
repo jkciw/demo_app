@@ -4,6 +4,12 @@
 package network.resilientcomms.meshdemo
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -47,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -409,7 +416,7 @@ private fun ExperienceSheet(state: MeshDemoState, onMessage: () -> Unit, onBitco
             if (!state.isGatewayAvailable) {
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "Bitcoin relay becomes available when the laptop Gateway appears on the mesh.",
+                    "Bitcoin relay becomes available when the Gateway node appears on the mesh.",
                     color = Muted,
                     fontSize = 11.sp,
                     lineHeight = 16.sp,
@@ -919,7 +926,7 @@ private fun BitcoinScreen(
     Text("Relay a Bitcoin transaction", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(10.dp))
     Text(
-        "A signed Regtest transaction is already stored on this phone. LoRa carries it to the laptop gateway, which submits it to Bitcoin Core.",
+        "A signed Regtest transaction is already stored on this phone. LoRa carries it to the Gateway node, which submits it to Bitcoin Core.",
         color = Muted,
         fontSize = 15.sp,
         lineHeight = 23.sp,
@@ -934,7 +941,7 @@ private fun BitcoinScreen(
             Text("TRANSACTION JOURNEY", color = BitcoinOrange, fontSize = 11.sp, fontWeight = FontWeight.Black)
             Spacer(Modifier.height(12.dp))
             Text(
-                "SIGNED TX  →  LORA MESH  →  LAPTOP  →  BITCOIN CORE",
+                "SIGNED TX  →  LORA MESH  →  GATEWAY NODE  →  BITCOIN CORE",
                 color = Color.White,
                 fontSize = 12.sp,
                 lineHeight = 19.sp,
@@ -983,20 +990,24 @@ private fun BitcoinRelayCard(
                 fontSize = 12.sp,
             )
             Spacer(Modifier.height(14.dp))
-            Text(
-                if (!state.isGatewayAvailable && !state.isBitcoinRelayActive) {
-                    "Gateway is not currently visible on the mesh"
-                } else {
-                    state.bitcoinStatusText
-                },
-                color = if (!state.isGatewayAvailable && !state.isBitcoinRelayActive) {
-                    Danger
-                } else {
-                    bitcoinStatusColor(state.bitcoinRelayProgress)
-                },
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
+            if (state.bitcoinRelayProgress == BitcoinRelayProgress.WAITING_FOR_GATEWAY) {
+                BitcoinConfirmationWait(state.bitcoinStatusText)
+            } else {
+                Text(
+                    if (!state.isGatewayAvailable && !state.isBitcoinRelayActive) {
+                        "Gateway is not currently visible on the mesh"
+                    } else {
+                        state.bitcoinStatusText
+                    },
+                    color = if (!state.isGatewayAvailable && !state.isBitcoinRelayActive) {
+                        Danger
+                    } else {
+                        bitcoinStatusColor(state.bitcoinRelayProgress)
+                    },
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
             if (state.bitcoinTotalChunks > 0) {
                 Spacer(Modifier.height(5.dp))
                 Text(
@@ -1026,6 +1037,59 @@ private fun BitcoinRelayCard(
             } else {
                 PrimaryButton("RESET DEVELOPMENT QUEUE", onReset, !state.isBitcoinRelayActive)
             }
+        }
+    }
+}
+
+@Composable
+private fun BitcoinConfirmationWait(statusText: String) {
+    val transition = rememberInfiniteTransition(label = "bitcoin-confirmation-hourglass")
+    val rotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 180f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1_100, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "hourglass-rotation",
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(BitcoinOrange.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(BitcoinOrange.copy(alpha = 0.16f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "⌛",
+                color = BitcoinOrange,
+                fontSize = 20.sp,
+                modifier = Modifier.rotate(rotation),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                "AWAITING BITCOIN CONFIRMATION",
+                color = BitcoinOrange,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                statusText,
+                color = Color.White,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
     }
 }
@@ -1079,7 +1143,7 @@ private fun ContactsScreen(
     }
 
     state.recipients.firstOrNull { it.kind == RecipientKind.GATEWAY }?.let { recipient ->
-        ExperienceLabel("GATEWAY SERVICES", "Reach the laptop and internet edge")
+        ExperienceLabel("GATEWAY SERVICES", "Reach the mesh edge and Bitcoin Core")
         Spacer(Modifier.height(9.dp))
         RecipientCard(recipient, onSelectRecipient)
         Spacer(Modifier.height(20.dp))
@@ -1375,7 +1439,7 @@ private fun GatewayServicesScreen(
         ExperienceHeader(
             symbol = "▣",
             title = "Gateway Services",
-            subtitle = if (recipient.isAvailable) "LoRa bridge online" else "Waiting for the laptop Gateway",
+            subtitle = if (recipient.isAvailable) "LoRa bridge online" else "Waiting for the Gateway node",
             accent = BitcoinOrange,
         )
         Spacer(Modifier.height(12.dp))
@@ -1394,7 +1458,7 @@ private fun GatewayServicesScreen(
                 Text("BIG SCREEN MESSAGE", color = BitcoinOrange, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Send a message to the laptop display. The Gateway is a service endpoint, not another person.",
+                    "Send a message to the Gateway node. It appears on the shared conference display because the Gateway is a service endpoint, not another person.",
                     color = Color.White,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
@@ -1564,7 +1628,7 @@ private fun GatewayActivityCard(message: ConversationLine) {
             Spacer(Modifier.width(10.dp))
             Column {
                 Text(
-                    if (message.outgoing) "SENT TO LAPTOP DISPLAY" else "GATEWAY RESPONSE",
+                    if (message.outgoing) "SENT TO GATEWAY NODE" else "GATEWAY RESPONSE",
                     color = if (message.outgoing) BitcoinOrange else Cyan,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Black,
@@ -1713,7 +1777,7 @@ private fun MessageRouteCard(state: MeshDemoState, recipient: MeshRecipient) {
             Text(
                 when (recipient.kind) {
                     RecipientKind.PERSON -> "LoRa addressed packet  →  ${recipient.displayName}"
-                    RecipientKind.GATEWAY -> "LoRa addressed packet  →  Gateway  →  Laptop"
+                    RecipientKind.GATEWAY -> "LoRa addressed packet  →  Gateway node  →  Shared display"
                     RecipientKind.EVERYONE -> "LoRa primary channel  →  Every listening node"
                 },
                 color = when (recipient.kind) {

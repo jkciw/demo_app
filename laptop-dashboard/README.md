@@ -1,7 +1,8 @@
-# Unified Message Console
+# Meshtastic Field Console
 
-A local, full-screen dashboard that receives Meshtastic and Reticulum/LXMF
-messages from two independent USB serial radios.
+A local, full-screen dashboard that receives Meshtastic messages from the laptop Gateway radio and
+displays the Bitcoin Regtest transaction relay. The conference experience is intentionally
+Meshtastic-only; Reticulum is deferred.
 
 ## Start and stop
 
@@ -38,35 +39,13 @@ The serial connection intentionally skips the firmware's full NodeDB replay. The
 learns Alice, Bob, and Gateway addresses from presence frames, while avoiding an ESP32-S3 serial
 framing failure that can occur during a high-volume NodeDB synchronization.
 
-## Add the Reticulum RNode
-
-Connect the second USB radio, find its `/dev/cu.*` path, and start with:
-
-```sh
-RETICULUM_PORT=/dev/cu.usbmodem2101 ./dashboardctl start
-```
-
-The Reticulum defaults are 925.875 MHz, 250 kHz, SF9, CR5, and 17 dBm. They
-must exactly match the two phone RNode configurations. Override any value with
-`RETICULUM_FREQUENCY`, `RETICULUM_BANDWIDTH`, `RETICULUM_SF`,
-`RETICULUM_CR`, and `RETICULUM_TXPOWER`.
-
-The dashboard creates a persistent LXMF identity and displays its destination
-hash. Add that destination as a contact on both phones. LXMF is end-to-end
-encrypted, so the laptop can display only messages that are addressed or
-explicitly copied to its destination; it cannot passively decrypt a private
-phone-to-phone conversation.
-
 ## Data flow
 
 ```text
-Meshtastic USB radio ─┐
-                     ├─ local collector ─ live event stream ─ dashboard
-Reticulum USB RNode ─┘
+Alice / Bob phones ─ LoRa mesh ─ Gateway USB radio ─ local collector ─ dashboard
 ```
 
-Messages are held in memory for the current run. The Reticulum identity is
-stored under `state/` so its destination address remains stable.
+Messages and relay state are held in memory for the current run.
 
 ## Bitcoin Regtest transaction relay
 

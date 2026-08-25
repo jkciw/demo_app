@@ -162,7 +162,7 @@ jobs:
           fi
 
           tag="meshtastic-v${version}-${GITHUB_SHA:0:7}"
-          title="Meshtastic Conference Demo v${version} — BLE reliability"
+          title="Meshtastic Conference Demo v${version} — Gateway clarity and Bitcoin relay"
           notes="meshtastic-demo/RELEASE_NOTES.md"
           apk="release/Meshtastic-Conference-Demo.apk"
           checksum="release/Meshtastic-Conference-Demo.apk.sha256"

@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Unified Message Console",
-  description: "Local Meshtastic and Reticulum field communications monitor.",
+  title: "Meshtastic Field Console",
+  description: "Local Meshtastic messaging and Bitcoin Regtest Gateway monitor.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

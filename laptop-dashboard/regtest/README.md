@@ -33,3 +33,15 @@ python3 bridge_smoke.py
 ```
 
 This mines two additional blocks but does not spend any Alpha or Bravo input.
+
+Replenish the APK with fresh, independent phone transactions without resetting
+the existing Regtest chain:
+
+```sh
+python3 replenish_phone_transactions.py --per-phone 20
+```
+
+This replaces the Alice and Bob queue assets in `meshtastic-demo` and writes an
+ignored audit manifest to `generated/phone-queue-latest.json`. Rebuild the APK
+after replenishing. Existing confirmed transactions and dashboard history remain
+valid.

@@ -2,7 +2,7 @@
 
 [Download the latest Android APK](https://github.com/jkciw/demo_app/releases/latest/download/Meshtastic-Conference-Demo.apk)
 
-Current conference build: **v0.3.1 — reliable queued Bitcoin relay**. The release page includes a plain-language
+Current conference build: **v0.3.3 — Gateway clarity and Bitcoin confirmation feedback**. The release page includes a plain-language
 change summary and a SHA-256 checksum alongside the universal APK.
 
 This is the complete application package. Android offers **Install** on a new phone and **Update**
@@ -15,6 +15,9 @@ This repository contains the two coordinated parts of the conference demo:
   station roles and independent bundled Bitcoin regtest transaction queues.
 - `laptop-dashboard/` — Serial gateway, Bitcoin Core regtest relay, and browser
   dashboard used by the laptop-connected Meshtastic node.
+
+The conference scope is intentionally Meshtastic-only. Reticulum exploration is deferred until
+after the event and is not exposed in the phone or dashboard experience.
 
 ## Repository layout
 

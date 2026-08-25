@@ -80,8 +80,9 @@ distributed under GPL-3.0-or-later terms.
 
 The universal APK packages independent Alice and Bob Regtest transaction queues under
 `assets/regtest_transactions_alpha.txt` and `assets/regtest_transactions_bravo.txt`. The selected
-runtime station role chooses the queue. The current Stage 3 development build contains two
-transactions per station. Each line is one complete signed raw transaction hex.
+runtime station role chooses the queue. Replenish both queues from the live demo chain with
+`laptop-dashboard/regtest/replenish_phone_transactions.py`. Each line is one complete signed raw
+transaction hex.
 
 On the home screen, **RELAY NEXT SIGNED TRANSACTION** first requests the Gateway's single upload
 slot. If Alice and Bob request it together, the first decoded request becomes active and the other

@@ -883,7 +883,7 @@ class MeshtasticSession(
                 _state.update {
                     it.copy(
                         bitcoinRelayProgress = BitcoinRelayProgress.WAITING_FOR_GATEWAY,
-                        bitcoinStatusText = "Transaction received by laptop · waiting for Bitcoin Core",
+                        bitcoinStatusText = "Transaction received by Gateway node · waiting for Bitcoin Core",
                     )
                 }
                 var result: BitcoinReply.Result? = null
@@ -891,7 +891,7 @@ class MeshtasticSession(
                     _state.update {
                         it.copy(
                             bitcoinStatusText = if (attempt == 1) {
-                                "Transaction received by laptop · waiting for Bitcoin Core"
+                                "Transaction received by Gateway node · waiting for Bitcoin Core"
                             } else {
                                 "Checking confirmed result · attempt $attempt"
                             },
@@ -918,7 +918,7 @@ class MeshtasticSession(
                     }
                 }
                 val confirmedResult = result ?: throw BitcoinRelayException(
-                    "Laptop did not return the confirmed transaction result",
+                    "Gateway node did not return the confirmed transaction result",
                 )
 
                 repeat(BITCOIN_RESULT_ACK_ATTEMPTS) { zeroBasedAttempt ->

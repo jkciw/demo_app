@@ -1,10 +1,19 @@
-# Meshtastic Conference Demo v0.3.1
+# Meshtastic Conference Demo v0.3.3
 
-This is the conference reliability build. The same universal APK is used on both participant
+This is the Gateway clarity and Bitcoin relay build. The same universal APK is used on both participant
 phones; choose **Alice** or **Bob** inside the app.
 
 ## What changed
 
+- **Bitcoin confirmation is visibly active:** once all chunks reach the Gateway node, an animated
+  hourglass appears while the phone polls the Gateway for the confirmed transaction result. It
+  disappears automatically on confirmation or failure.
+- **Gateway language is consistent:** attendee-facing routes, status messages, confirmation text,
+  and errors describe the service as the **Gateway node**, without exposing its current host device.
+- **Fresh transactions are ready:** Alice and Bob each receive 20 independently funded, presigned
+  Regtest transactions, with a repeatable replenishment tool for future testing.
+- **Conference scope is focused:** the attendee-facing app, Gateway console, and operating guide now
+  present only the tested Meshtastic experience; unfinished Reticulum placeholders are hidden.
 - **Simultaneous Bitcoin requests are orderly:** Alice and Bob request a Gateway upload slot before
   transmitting transaction chunks. The first decoded request becomes active and the other phone
   displays its FIFO queue position, then starts automatically when the Gateway grants its turn.
