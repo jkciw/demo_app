@@ -29,7 +29,7 @@ from transaction_bridge import (
 NODE_NAMES = {
     "!2303a141": "Gateway",
 }
-BITCOIN_REPLY_INTERVAL_SECONDS = 3.0
+BITCOIN_REPLY_INTERVAL_SECONDS = 1.0
 PRESENCE_PREFIX = "DEMO_PRESENCE"
 PRESENCE_REQUEST = "DEMO_PRESENCE_REQUEST|1"
 PRESENCE_INTERVAL_SECONDS = 5 * 60.0
@@ -38,7 +38,7 @@ PRESENCE_REQUEST_RESPONSE_DELAY_SECONDS = 3.0
 
 
 def presence_announcement(identity: str, session: str) -> str:
-    if identity not in {"ALICE", "BOB", "GATEWAY"}:
+    if identity not in {"ALICE", "BOB", "CHARLIE", "DANA", "GATEWAY"}:
         raise ValueError("Unknown conference identity")
     if not session or len(session) > 24 or not all(
         character.isalnum() or character in "_-" for character in session
@@ -57,6 +57,22 @@ def parse_presence_announcement(text: str) -> tuple[str, str] | None:
     except ValueError:
         return None
     return identity, session
+
+
+def radio_configuration(interface: Any) -> dict[str, str]:
+    """Return operator-facing LoRa settings reported by the connected Gateway."""
+    try:
+        from meshtastic.protobuf import config_pb2
+
+        lora = interface.localNode.localConfig.lora
+        preset = config_pb2.Config.LoRaConfig.ModemPreset.Name(lora.modem_preset)
+        region = config_pb2.Config.LoRaConfig.RegionCode.Name(lora.region)
+    except (AttributeError, ImportError, TypeError, ValueError):
+        return {}
+    return {
+        "modemPreset": preset.replace("_", " ").title().replace(" ", ""),
+        "region": region,
+    }
 
 
 def utc_now() -> str:
@@ -215,12 +231,16 @@ class MeshtasticAdapter(threading.Thread):
                 daemon=True,
             ).start()
             node_count = len(getattr(self.interface, "nodes", {}) or {})
+            radio_config = radio_configuration(self.interface)
+            preset = radio_config.get("modemPreset", "Unknown preset")
+            region = radio_config.get("region", "Unknown region")
             self.hub.update_transport(
                 "meshtastic",
                 status="online",
                 port=self.port,
-                detail="LongFast / TW",
+                detail=f"{preset} / {region}",
                 knownNodes=node_count,
+                **radio_config,
             )
             self.stop_event.wait()
         except Exception as exc:

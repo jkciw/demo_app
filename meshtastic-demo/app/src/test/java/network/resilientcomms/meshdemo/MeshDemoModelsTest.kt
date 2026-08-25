@@ -107,8 +107,12 @@ class MeshDemoModelsTest {
             bitcoinChunkFrame("alpha1", index + 1, chunks.size, chunk)
         }
 
-        assertEquals(listOf(100, 100, 100, 82), chunks.map(String::length))
+        assertEquals(listOf(200, 182), chunks.map(String::length))
         assertTrue(frames.all { it.encodeToByteArray().size <= MAX_TEXT_BYTES })
+        assertTrue(
+            bitcoinChunkFrame("a12345678901", 1, 2, chunks.first())
+                .encodeToByteArray().size <= MAX_TEXT_BYTES,
+        )
         assertEquals(rawHex, chunks.joinToString(""))
     }
 
@@ -182,12 +186,16 @@ class MeshDemoModelsTest {
     fun stationRoles_haveIndependentNamesAssetsAndQueueProgress() {
         assertEquals(StationRole.ALPHA, StationRole.fromStorageId("alpha"))
         assertEquals(StationRole.BRAVO, StationRole.fromStorageId("bravo"))
+        assertEquals(StationRole.CHARLIE, StationRole.fromStorageId("charlie"))
+        assertEquals(StationRole.DANA, StationRole.fromStorageId("dana"))
         assertEquals(null, StationRole.fromStorageId("unknown"))
-        assertFalse(StationRole.ALPHA.transactionAssetName == StationRole.BRAVO.transactionAssetName)
-        assertEquals("Alice", StationRole.ALPHA.stationName)
-        assertEquals("Bob", StationRole.BRAVO.stationName)
+        assertEquals(listOf("Alice", "Bob", "Charlie", "Dana"), StationRole.entries.map { it.stationName })
+        assertEquals(4, StationRole.entries.map { it.transactionAssetName }.distinct().size)
+        assertEquals(listOf(0, 1, 2, 3), StationRole.entries.map { it.presenceSlot })
         assertEquals("next_transaction_alpha", nextTransactionPreferenceKey(StationRole.ALPHA))
         assertEquals("next_transaction_bravo", nextTransactionPreferenceKey(StationRole.BRAVO))
+        assertEquals("next_transaction_charlie", nextTransactionPreferenceKey(StationRole.CHARLIE))
+        assertEquals("next_transaction_dana", nextTransactionPreferenceKey(StationRole.DANA))
     }
 
     @Test
@@ -204,21 +212,28 @@ class MeshDemoModelsTest {
     }
 
     @Test
-    fun aliceContacts_prioritizeBobThenGatewayAndKeepBroadcastSeparate() {
+    fun aliceContacts_listThreePeopleThenGatewayAndKeepBroadcastSeparate() {
         val contacts = conferenceRecipients(
             StationRole.ALPHA,
             listOf(
                 KnownMeshNode(21, "MESH-BRAVO"),
+                KnownMeshNode(22, "Charlie"),
+                KnownMeshNode(23, "Dana"),
                 KnownMeshNode(LAPTOP_NODE_NUMBER, "Laptop Gateway"),
             ),
         )
 
-        assertEquals(listOf("Bob", "Gateway", "Everyone"), contacts.map(MeshRecipient::displayName))
+        assertEquals(
+            listOf("Bob", "Charlie", "Dana", "Gateway", "Everyone"),
+            contacts.map(MeshRecipient::displayName),
+        )
         assertEquals(21, contacts[0].nodeNumber)
-        assertTrue(contacts[0].isAvailable)
-        assertEquals(LAPTOP_NODE_NUMBER, contacts[1].nodeNumber)
-        assertTrue(contacts[2].isBroadcast)
-        assertEquals(null, contacts[2].nodeNumber)
+        assertEquals(22, contacts[1].nodeNumber)
+        assertEquals(23, contacts[2].nodeNumber)
+        assertTrue(contacts.take(3).all(MeshRecipient::isAvailable))
+        assertEquals(LAPTOP_NODE_NUMBER, contacts[3].nodeNumber)
+        assertTrue(contacts[4].isBroadcast)
+        assertEquals(null, contacts[4].nodeNumber)
     }
 
     @Test
@@ -233,16 +248,18 @@ class MeshDemoModelsTest {
         assertEquals(11, available.first().nodeNumber)
         assertTrue(available.first().isAvailable)
         assertFalse(unavailable.first().isAvailable)
-        assertFalse(unavailable[1].isAvailable)
-        assertEquals(null, unavailable[1].nodeNumber)
+        assertFalse(unavailable.first { it.kind == RecipientKind.GATEWAY }.isAvailable)
+        assertEquals(null, unavailable.first { it.kind == RecipientKind.GATEWAY }.nodeNumber)
     }
 
     @Test
     fun participantNames_mapLegacyConferenceNamesToVisitorNames() {
         assertEquals("Alice", participantName(11, "MESH-ALPHA"))
         assertEquals("Bob", participantName(12, "Bravo"))
+        assertEquals("Charlie", participantName(13, "MESH-CHARLIE"))
+        assertEquals("Dana", participantName(14, "Dana"))
         assertEquals("Gateway", participantName(LAPTOP_NODE_NUMBER, "anything"))
-        assertEquals("Field node", participantName(13, "Field node"))
+        assertEquals("Field node", participantName(15, "Field node"))
     }
 
     @Test
@@ -262,8 +279,9 @@ class MeshDemoModelsTest {
             nowMs = nowMs,
         )
 
-        assertEquals(gatewayNode, contacts[1].nodeNumber)
-        assertTrue(contacts[1].isAvailable)
+        val gateway = contacts.first { it.kind == RecipientKind.GATEWAY }
+        assertEquals(gatewayNode, gateway.nodeNumber)
+        assertTrue(gateway.isAvailable)
         assertTrue(isGatewaySource(gatewayNode, listOf(presence), nowMs))
         assertTrue(
             isGatewaySource(
@@ -310,6 +328,14 @@ class MeshDemoModelsTest {
             parsePresenceFrame(frame),
         )
         assertEquals(PresenceFrame.Request, parsePresenceFrame(PRESENCE_REQUEST))
+        assertEquals(
+            PresenceFrame.Announcement(ConferenceIdentity.CHARLIE, "charlie_session"),
+            parsePresenceFrame(presenceAnnouncementFrame(ConferenceIdentity.CHARLIE, "charlie_session")),
+        )
+        assertEquals(
+            PresenceFrame.Announcement(ConferenceIdentity.DANA, "dana_session"),
+            parsePresenceFrame(presenceAnnouncementFrame(ConferenceIdentity.DANA, "dana_session")),
+        )
         assertEquals(null, parsePresenceFrame("DEMO_PRESENCE|2|ALICE|session"))
         assertEquals(null, parsePresenceFrame("DEMO_PRESENCE|1|UNKNOWN|session"))
         assertEquals(null, parsePresenceFrame("ordinary visitor message"))
@@ -335,9 +361,37 @@ class MeshDemoModelsTest {
         )
 
         assertEquals(aliceRadio.nodeNumber, aliceContacts[0].nodeNumber)
-        assertEquals(13, aliceContacts[1].nodeNumber)
+        assertEquals(13, aliceContacts.first { it.kind == RecipientKind.GATEWAY }.nodeNumber)
         assertEquals("Bob", presenceName(aliceRadio.nodeNumber, presences, now))
         assertEquals("Alice", presenceName(bobRadio.nodeNumber, presences, now))
+    }
+
+    @Test
+    fun charlieContacts_resolveAllOtherPhonesFromPresence() {
+        val now = 2_000_000L
+        val presences = listOf(
+            StationPresence(ConferenceIdentity.ALICE, 11, "alice", now),
+            StationPresence(ConferenceIdentity.BOB, 12, "bob", now),
+            StationPresence(ConferenceIdentity.CHARLIE, 13, "charlie", now),
+            StationPresence(ConferenceIdentity.DANA, 14, "dana", now),
+            StationPresence(ConferenceIdentity.GATEWAY, 15, "gateway", now),
+        )
+
+        val contacts = conferenceRecipients(
+            role = StationRole.CHARLIE,
+            nodes = emptyList(),
+            ownNodeNumber = 13,
+            presences = presences,
+            nowMs = now,
+        )
+
+        assertEquals(
+            listOf("Alice", "Bob", "Dana", "Gateway", "Everyone"),
+            contacts.map(MeshRecipient::displayName),
+        )
+        assertEquals(listOf(11, 12, 14), contacts.take(3).map(MeshRecipient::nodeNumber))
+        assertTrue(contacts.take(4).all(MeshRecipient::isAvailable))
+        assertTrue(contacts.last().isBroadcast)
     }
 
     @Test

@@ -1228,7 +1228,7 @@ class MeshtasticSession(
         if (presenceJob?.isActive == true && client === radioClient) return
         stopPresenceLoop()
         presenceJob = scope.launch {
-            val stationOffset = (_state.value.stationRole?.ordinal ?: 0) * PRESENCE_STATION_OFFSET_MS
+            val stationOffset = (_state.value.stationRole?.presenceSlot ?: 0) * PRESENCE_STATION_OFFSET_MS
             delay(initialDelayMs + stationOffset)
             if (client !== radioClient || !_state.value.isConnected) return@launch
             sendPresence(radioClient)
@@ -1277,7 +1277,7 @@ class MeshtasticSession(
         presenceRequestJob = scope.launch {
             delay(
                 PRESENCE_REQUEST_RESPONSE_DELAY_MS +
-                    (_state.value.stationRole?.ordinal ?: 0) * PRESENCE_STATION_OFFSET_MS,
+                    (_state.value.stationRole?.presenceSlot ?: 0) * PRESENCE_STATION_OFFSET_MS,
             )
             if (client === radioClient && _state.value.isConnected) sendPresence(radioClient)
         }
@@ -1412,7 +1412,9 @@ class MeshtasticSession(
     private fun newBitcoinSession(queueIndex: Int): String {
         val timestamp = System.currentTimeMillis().toString(36)
         val queueId = _state.value.stationRole?.storageId ?: "station"
-        return "${queueId.take(1)}${queueIndex.toString(36)}$timestamp".take(24)
+        // Keep the session compact so a 200-character payload remains below
+        // Meshtastic's 233-byte text limit after the BTC_TX frame metadata.
+        return "${queueId.take(1)}${queueIndex.toString(36)}$timestamp".take(12)
     }
 
     private companion object {
@@ -1436,7 +1438,7 @@ class MeshtasticSession(
         const val BITCOIN_RESULT_RETRY_MIN_MS = 3_000L
         const val BITCOIN_RESULT_RETRY_MAX_MS = 7_000L
         const val BITCOIN_RESULT_ACK_ATTEMPTS = 2
-        const val BITCOIN_RESULT_ACK_RETRY_MS = 2_000L
+        const val BITCOIN_RESULT_ACK_RETRY_MS = 1_000L
         const val RECOVERY_INITIAL_DELAY_MS = 1_000L
         const val RECOVERY_MAX_DELAY_MS = 15_000L
         const val PRESENCE_INITIAL_DELAY_MS = 5_000L

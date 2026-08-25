@@ -11,7 +11,7 @@ identity, and transaction-queue state.
 
 This repository contains the two coordinated parts of the conference demo:
 
-- `meshtastic-demo/` — One universal Android application with runtime Alice/Bob
+- `meshtastic-demo/` — One universal Android application with runtime Alice, Bob, Charlie, and Dana
   station roles and independent bundled Bitcoin regtest transaction queues.
 - `laptop-dashboard/` — Serial gateway, Bitcoin Core regtest relay, and browser
   dashboard used by the laptop-connected Meshtastic node.
@@ -29,9 +29,9 @@ demo_app/
 └── README.md             Repository overview
 ```
 
-The optional four-phone, dual-receiver expansion is developed separately under
+The optional four-phone, faster-preset expansion is developed separately under
 the policy in [`docs/four-station-mesh.md`](docs/four-station-mesh.md). The
-stable `main` release is not replaced until the six-radio hardware acceptance
+stable `main` release is not replaced until the five-radio hardware acceptance
 gate passes.
 
 Project-specific setup and operating instructions live in each project's own

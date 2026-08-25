@@ -1,5 +1,6 @@
 import unittest
 import threading
+from types import SimpleNamespace
 
 from monitor import (
     MeshtasticAdapter,
@@ -7,6 +8,7 @@ from monitor import (
     UnavailableBitcoinRpc,
     parse_presence_announcement,
     presence_announcement,
+    radio_configuration,
 )
 
 
@@ -14,6 +16,14 @@ class MessageHubTest(unittest.TestCase):
     def test_presence_frames_are_strict_and_round_trip(self):
         frame = presence_announcement("GATEWAY", "session_123")
         self.assertEqual(("GATEWAY", "session_123"), parse_presence_announcement(frame))
+        self.assertEqual(
+            ("CHARLIE", "charlie_123"),
+            parse_presence_announcement(presence_announcement("CHARLIE", "charlie_123")),
+        )
+        self.assertEqual(
+            ("DANA", "dana_123"),
+            parse_presence_announcement(presence_announcement("DANA", "dana_123")),
+        )
         self.assertIsNone(parse_presence_announcement("DEMO_PRESENCE|1|MALLORY|session"))
         self.assertIsNone(parse_presence_announcement("DEMO_PRESENCE|2|ALICE|session"))
 
@@ -68,6 +78,24 @@ class MessageHubTest(unittest.TestCase):
         hub.add_message({"id": "meshtastic-1", "transport": "meshtastic", "text": "one"})
         hub.add_message({"id": "meshtastic-1", "transport": "meshtastic", "text": "duplicate"})
         self.assertEqual(1, len(hub.snapshot()["messages"]))
+
+    def test_radio_configuration_reports_short_fast_and_region(self):
+        from meshtastic.protobuf import config_pb2
+
+        lora = config_pb2.Config.LoRaConfig(
+            modem_preset=config_pb2.Config.LoRaConfig.SHORT_FAST,
+            region=config_pb2.Config.LoRaConfig.TW,
+        )
+        interface = SimpleNamespace(
+            localNode=SimpleNamespace(
+                localConfig=SimpleNamespace(lora=lora),
+            ),
+        )
+
+        self.assertEqual(
+            {"modemPreset": "ShortFast", "region": "TW"},
+            radio_configuration(interface),
+        )
 
     def test_transport_updates_preserve_other_fields(self):
         hub = MessageHub()

@@ -21,13 +21,19 @@ from bootstrap import (
 
 
 DEFAULT_PER_PHONE = 20
+PHONE_QUEUES = (
+    ("alice", "regtest_transactions_alpha.txt"),
+    ("bob", "regtest_transactions_bravo.txt"),
+    ("charlie", "regtest_transactions_charlie.txt"),
+    ("dana", "regtest_transactions_dana.txt"),
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Fund and sign fresh, mutually independent Regtest transactions, then replace "
-            "the Alice and Bob APK queue assets."
+            "the Alice, Bob, Charlie, and Dana APK queue assets."
         ),
     )
     parser.add_argument(
@@ -65,7 +71,7 @@ def main() -> int:
         raise RuntimeError(f"Expected regtest, connected to {chain.get('chain')!r}")
     ensure_wallet(rpc)
 
-    total = args.per_phone * 2
+    total = args.per_phone * len(PHONE_QUEUES)
     generated_at = datetime.now(timezone.utc)
     batch_id = generated_at.strftime("%Y%m%d%H%M%S")
     mining_address = rpc.call(
@@ -107,23 +113,26 @@ def main() -> int:
         "bech32",
         wallet=WALLET_NAME,
     )
+    phone_transactions: dict[str, list[dict[str, object]]] = {}
+    for phone_index, (identity, _) in enumerate(PHONE_QUEUES):
+        start = phone_index * args.per_phone
+        addresses = funding_addresses[start : start + args.per_phone]
+        phone_transactions[identity] = [
+            create_signed_spend(
+                rpc=rpc,
+                funding_txid=funding_txid,
+                vout=vout_by_address[address],
+                sink_address=sink_address,
+                identifier=f"{identity}-{batch_id}-{sequence:03d}",
+                sequence=sequence,
+            )
+            for sequence, address in enumerate(addresses, start=1)
+        ]
     transactions = [
-        create_signed_spend(
-            rpc=rpc,
-            funding_txid=funding_txid,
-            vout=vout_by_address[address],
-            sink_address=sink_address,
-            identifier=(
-                f"alice-{batch_id}-{index + 1:03d}"
-                if index < args.per_phone
-                else f"bob-{batch_id}-{index - args.per_phone + 1:03d}"
-            ),
-            sequence=(index % args.per_phone) + 1,
-        )
-        for index, address in enumerate(funding_addresses)
+        transaction
+        for identity, _ in PHONE_QUEUES
+        for transaction in phone_transactions[identity]
     ]
-    alice = transactions[: args.per_phone]
-    bob = transactions[args.per_phone :]
 
     for transaction in transactions:
         prevout = transaction["input"]
@@ -134,10 +143,11 @@ def main() -> int:
 
     repository_root = paths.root.parent.parent
     assets = repository_root / "meshtastic-demo" / "app" / "src" / "main" / "assets"
-    alice_asset = assets / "regtest_transactions_alpha.txt"
-    bob_asset = assets / "regtest_transactions_bravo.txt"
-    write_asset(alice_asset, "Alice", alice)
-    write_asset(bob_asset, "Bob", bob)
+    asset_paths: dict[str, Path] = {}
+    for identity, asset_name in PHONE_QUEUES:
+        asset_path = assets / asset_name
+        asset_paths[identity] = asset_path
+        write_asset(asset_path, identity.title(), phone_transactions[identity])
 
     manifest = {
         "version": 1,
@@ -147,17 +157,16 @@ def main() -> int:
         "fundingBlockHash": funding_block_hash,
         "blockHeight": int(rpc.call("getblockcount")),
         "perPhone": args.per_phone,
-        "phoneTransactions": {"alice": alice, "bob": bob},
+        "phoneTransactions": phone_transactions,
     }
     write_json(paths.generated / "phone-queue-latest.json", manifest)
 
     print("Fresh phone transaction queues are ready")
     print(f"  Block height: {manifest['blockHeight']}")
     print(f"  Funding TXID: {funding_txid}")
-    print(f"  Alice queue:  {len(alice)} fresh transactions")
-    print(f"  Bob queue:    {len(bob)} fresh transactions")
-    print(f"  Alice asset:  {alice_asset}")
-    print(f"  Bob asset:    {bob_asset}")
+    for identity, _ in PHONE_QUEUES:
+        print(f"  {identity.title()} queue: {len(phone_transactions[identity])} fresh transactions")
+        print(f"  {identity.title()} asset: {asset_paths[identity]}")
     return 0
 
 

@@ -4,7 +4,7 @@
 package network.resilientcomms.meshdemo
 
 internal const val MAX_TEXT_BYTES = 233
-internal const val BITCOIN_CHUNK_HEX_CHARS = 100
+internal const val BITCOIN_CHUNK_HEX_CHARS = 200
 internal const val LAPTOP_NODE_NUMBER = 0x2303A141
 internal const val PRESENCE_TTL_MS = 10 * 60 * 1000L
 internal const val PRESENCE_PREFIX = "DEMO_PRESENCE"
@@ -23,6 +23,8 @@ enum class DemoStep {
 enum class ConferenceIdentity {
     ALICE,
     BOB,
+    CHARLIE,
+    DANA,
     GATEWAY,
 }
 
@@ -227,13 +229,12 @@ internal val StationRole.conferenceIdentity: ConferenceIdentity
     get() = when (this) {
         StationRole.ALPHA -> ConferenceIdentity.ALICE
         StationRole.BRAVO -> ConferenceIdentity.BOB
+        StationRole.CHARLIE -> ConferenceIdentity.CHARLIE
+        StationRole.DANA -> ConferenceIdentity.DANA
     }
 
-internal val StationRole.peerIdentity: ConferenceIdentity
-    get() = when (this) {
-        StationRole.ALPHA -> ConferenceIdentity.BOB
-        StationRole.BRAVO -> ConferenceIdentity.ALICE
-    }
+internal val StationRole.peerRoles: List<StationRole>
+    get() = StationRole.entries.filterNot { it == this }
 
 internal fun presenceAnnouncementFrame(identity: ConferenceIdentity, session: String): String {
     require(Regex("^[A-Za-z0-9_-]{1,24}$").matches(session))
@@ -291,24 +292,49 @@ internal fun conferenceRecipients(
     presences: Collection<StationPresence> = emptyList(),
     nowMs: Long = System.currentTimeMillis(),
 ): List<MeshRecipient> {
-    val peerRole = if (role == StationRole.ALPHA) StationRole.BRAVO else StationRole.ALPHA
-    val peerName = peerRole.stationName.titleCaseDisplay()
-    val peerPresence = latestPresence(role.peerIdentity, presences, nowMs)
-    val peerNode = peerPresence?.let { KnownMeshNode(it.nodeNumber, peerName) }
-        ?: nodes.firstOrNull { it.isConferenceNode(peerRole) } ?: ownNodeNumber?.let { ownNode ->
-        nodes.firstOrNull {
-            it.nodeNumber != ownNode &&
-                it.nodeNumber != LAPTOP_NODE_NUMBER &&
-                normalizeNodeName(it.longName) !in GATEWAY_NODE_NAMES
-        }
-    }
     val gatewayPresence = latestPresence(ConferenceIdentity.GATEWAY, presences, nowMs)
     val gatewayNode = gatewayPresence?.let { KnownMeshNode(it.nodeNumber, "Gateway") } ?: nodes.firstOrNull {
         it.nodeNumber == LAPTOP_NODE_NUMBER || normalizeNodeName(it.longName) in GATEWAY_NODE_NAMES
     }
-    return listOf(
+    val peers = role.peerRoles
+    val peerPresences = peers.associateWith { peer ->
+        latestPresence(peer.conferenceIdentity, presences, nowMs)
+    }
+    val peerNodes = peers.associateWith { peer ->
+        val presence = peerPresences.getValue(peer)
+        presence?.let { KnownMeshNode(it.nodeNumber, peer.stationName) }
+            ?: nodes.firstOrNull { it.isConferenceNode(peer) }
+    }.toMutableMap()
+
+    // Preserve the proven two-phone fallback when generic Meshtastic radio names
+    // are present before app presence arrives. Four-way identity is intentionally
+    // presence-driven because generic radio names cannot be mapped safely.
+    val legacyPeer = when (role) {
+        StationRole.ALPHA -> StationRole.BRAVO
+        StationRole.BRAVO -> StationRole.ALPHA
+        StationRole.CHARLIE,
+        StationRole.DANA,
+        -> null
+    }
+    if (legacyPeer != null && peerNodes[legacyPeer] == null && ownNodeNumber != null) {
+        val claimedNodes = peerNodes.values.mapNotNull { it?.nodeNumber }.toSet()
+        val genericCandidates = nodes.filter { node ->
+            node.nodeNumber != ownNodeNumber &&
+                node.nodeNumber != gatewayNode?.nodeNumber &&
+                node.nodeNumber != LAPTOP_NODE_NUMBER &&
+                node.nodeNumber !in claimedNodes &&
+                normalizeNodeName(node.longName) !in ALL_CONFERENCE_NODE_NAMES &&
+                normalizeNodeName(node.longName) !in GATEWAY_NODE_NAMES
+        }
+        if (genericCandidates.size == 1) peerNodes[legacyPeer] = genericCandidates.single()
+    }
+
+    val people = peers.map { peer ->
+        val peerName = peer.stationName
+        val peerPresence = peerPresences.getValue(peer)
+        val peerNode = peerNodes[peer]
         MeshRecipient(
-            id = peerRole.storageId,
+            id = peer.storageId,
             nodeNumber = peerNode?.nodeNumber,
             displayName = peerName,
             description = when {
@@ -318,7 +344,9 @@ internal fun conferenceRecipients(
             },
             kind = RecipientKind.PERSON,
             isAvailable = peerNode != null,
-        ),
+        )
+    }
+    return people + listOf(
         MeshRecipient(
             id = "gateway",
             nodeNumber = gatewayNode?.nodeNumber,
@@ -346,6 +374,8 @@ internal fun participantName(nodeNumber: Int, advertisedName: String?): String =
     nodeNumber == LAPTOP_NODE_NUMBER -> "Gateway"
     normalizeNodeName(advertisedName.orEmpty()) in ALICE_NODE_NAMES -> "Alice"
     normalizeNodeName(advertisedName.orEmpty()) in BOB_NODE_NAMES -> "Bob"
+    normalizeNodeName(advertisedName.orEmpty()) in CHARLIE_NODE_NAMES -> "Charlie"
+    normalizeNodeName(advertisedName.orEmpty()) in DANA_NODE_NAMES -> "Dana"
     normalizeNodeName(advertisedName.orEmpty()) in GATEWAY_NODE_NAMES -> "Gateway"
     else -> advertisedName?.takeIf(String::isNotBlank) ?: NodeIdLabel.from(nodeNumber)
 }
@@ -364,6 +394,8 @@ private fun KnownMeshNode.isConferenceNode(role: StationRole): Boolean {
     return when (role) {
         StationRole.ALPHA -> normalized in ALICE_NODE_NAMES
         StationRole.BRAVO -> normalized in BOB_NODE_NAMES
+        StationRole.CHARLIE -> normalized in CHARLIE_NODE_NAMES
+        StationRole.DANA -> normalized in DANA_NODE_NAMES
     }
 }
 
@@ -373,14 +405,16 @@ private fun normalizeNodeName(value: String): String = value
     .replace(Regex("[^A-Z0-9]+"), "-")
     .trim('-')
 
-private fun String.titleCaseDisplay(): String = lowercase().replaceFirstChar(Char::uppercase)
-
 private object NodeIdLabel {
     fun from(nodeNumber: Int): String = "!${nodeNumber.toUInt().toString(16)}"
 }
 
 private val ALICE_NODE_NAMES = setOf("ALICE", "MESH-ALPHA", "ALPHA")
 private val BOB_NODE_NAMES = setOf("BOB", "MESH-BRAVO", "BRAVO")
+private val CHARLIE_NODE_NAMES = setOf("CHARLIE", "MESH-CHARLIE")
+private val DANA_NODE_NAMES = setOf("DANA", "MESH-DANA")
+private val ALL_CONFERENCE_NODE_NAMES =
+    ALICE_NODE_NAMES + BOB_NODE_NAMES + CHARLIE_NODE_NAMES + DANA_NODE_NAMES
 private val GATEWAY_NODE_NAMES = setOf("GATEWAY", "LAPTOP-GATEWAY", "BIG-SCREEN")
 
 internal fun nextTransactionPreferenceKey(role: StationRole): String =

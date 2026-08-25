@@ -13,8 +13,8 @@ android {
         applicationId = "network.resilientcomms.meshdemo"
         minSdk = 26
         targetSdk = 37
-        versionCode = 7
-        versionName = "0.3.3"
+        versionCode = 8
+        versionName = "0.4.0-beta.1"
         resValue("string", "app_name", "Meshtastic Conference Demo")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

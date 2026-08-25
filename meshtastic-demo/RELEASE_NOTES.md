@@ -1,7 +1,9 @@
-# Meshtastic Conference Demo v0.3.3
+# Meshtastic Conference Demo v0.4.0-beta.1
 
-This is the Gateway clarity and Bitcoin relay build. The same universal APK is used on both participant
-phones; choose **Alice** or **Bob** inside the app.
+This is the four-station software preview built from `four-station-mesh`. The same universal APK is
+used on every participant phone; choose **Alice**, **Bob**, **Charlie**, or **Dana** inside the app.
+The hardware-proven v0.3.3 release on `main` remains the conference fallback until the five-radio
+acceptance gate passes.
 
 ## What changed
 
@@ -10,13 +12,21 @@ phones; choose **Alice** or **Bob** inside the app.
   disappears automatically on confirmation or failure.
 - **Gateway language is consistent:** attendee-facing routes, status messages, confirmation text,
   and errors describe the service as the **Gateway node**, without exposing its current host device.
-- **Fresh transactions are ready:** Alice and Bob each receive 20 independently funded, presigned
+- **Four visitor identities are ready:** every phone shows the other three participants as direct
+  contacts, plus Gateway and the explicit Everyone broadcast route.
+- **Presence is staggered:** Alice, Bob, Charlie, and Dana use distinct announcement offsets to
+  reduce collisions while retaining runtime identity discovery when radios are swapped.
+- **The single mesh is faster:** current signed transactions use two 200-character chunks instead
+  of four 100-character chunks, and Gateway replies are paced at one-second intervals.
+- **Radio configuration is visible:** the dashboard reports the modem preset and region read from
+  the connected Gateway rather than displaying a hard-coded LongFast label.
+- **Fresh transactions are ready:** all four identities receive 20 independently funded, presigned
   Regtest transactions, with a repeatable replenishment tool for future testing.
 - **Conference scope is focused:** the attendee-facing app, Gateway console, and operating guide now
   present only the tested Meshtastic experience; unfinished Reticulum placeholders are hidden.
-- **Simultaneous Bitcoin requests are orderly:** Alice and Bob request a Gateway upload slot before
-  transmitting transaction chunks. The first decoded request becomes active and the other phone
-  displays its FIFO queue position, then starts automatically when the Gateway grants its turn.
+- **Simultaneous Bitcoin requests are orderly:** participant phones request a Gateway upload slot
+  before transmitting transaction chunks. The first decoded request becomes active and the others
+  display FIFO queue positions, then start automatically as the Gateway grants each turn.
 - **Final results survive packet loss:** after its final chunk is acknowledged, the phone requests
   the stored TXID and Regtest block height until the Gateway answers. The Gateway keeps that phone's
   slot until the result is acknowledged, so the next queued upload cannot collide with result
@@ -41,7 +51,7 @@ phones; choose **Alice** or **Bob** inside the app.
   Gateway node discovered by presence, rather than relying on a fixed radio identity.
 - **Bitcoin control packets stay out of chat:** transaction chunks and acknowledgements remain part
   of the relay workflow without appearing as visitor messages.
-- **Presence traffic is quieter:** Alice, Bob, and Gateway advertise every five minutes, with a
+- **Presence traffic is quieter:** all four phones and Gateway advertise every five minutes, with a
   ten-minute presence window, reducing contention during long transaction relays.
 
 ## Install or update

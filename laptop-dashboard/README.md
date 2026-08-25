@@ -30,19 +30,24 @@ Only one application can own a serial device at a time. Stop the Meshtastic
 CLI listener before starting the dashboard.
 
 While the collector is running, the serial node announces itself as **Gateway** using the same
-lightweight `DEMO_PRESENCE` protocol as the Alice and Bob phone apps. It also responds to a phone's
+lightweight `DEMO_PRESENCE` protocol as the Alice, Bob, Charlie, and Dana phone apps. It also responds to a phone's
 presence refresh request. These control frames are consumed by the collector and never appear in
 the public message list; incoming phone messages are labelled from the most recent app presence,
 not from a hard-coded LilyGo node ID.
 
 The serial connection intentionally skips the firmware's full NodeDB replay. The conference app
-learns Alice, Bob, and Gateway addresses from presence frames, while avoiding an ESP32-S3 serial
+learns all four phone identities and the Gateway address from presence frames, while avoiding an ESP32-S3 serial
 framing failure that can occur during a high-volume NodeDB synchronization.
+
+For the four-station preview, configure every radio to the same primary channel,
+`ShortFast` modem preset, and `TW` region before starting the dashboard. The
+dashboard displays the preset and region reported by the connected Gateway; it
+does not change radio configuration.
 
 ## Data flow
 
 ```text
-Alice / Bob phones ─ LoRa mesh ─ Gateway USB radio ─ local collector ─ dashboard
+Alice / Bob / Charlie / Dana phones ─ LoRa mesh ─ Gateway USB radio ─ local collector ─ dashboard
 ```
 
 Messages and relay state are held in memory for the current run.
@@ -62,7 +67,7 @@ BTC_QUEUED|<session>|<position>
 ```
 
 Only the active station sends signed transaction hex in one-based chunks. The conference app uses
-100 hexadecimal characters per payload:
+200 hexadecimal characters per payload:
 
 ```text
 BTC_TX|<session>|<chunk>/<total>|<hex>

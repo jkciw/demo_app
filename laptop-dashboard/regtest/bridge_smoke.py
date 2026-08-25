@@ -77,7 +77,7 @@ def main() -> int:
         executor=InlineExecutor(),
     )
     raw_hex = child_signed["hex"]
-    chunks = [raw_hex[index : index + 170] for index in range(0, len(raw_hex), 170)]
+    chunks = [raw_hex[index : index + 200] for index in range(0, len(raw_hex), 200)]
     for index, chunk in enumerate(chunks, start=1):
         bridge.handle_text(
             f"BTC_TX|stage2smoke|{index}/{len(chunks)}|{chunk}",

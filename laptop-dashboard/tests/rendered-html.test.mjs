@@ -37,7 +37,7 @@ test("server-renders the conference dashboard and Bitcoin relay", async () => {
   assert.match(html, /BITCOIN \/ REGTEST/);
   assert.match(html, /RPC port/);
   assert.match(html, />18443</);
-  assert.match(html, /Waiting for a signed transaction from Alice or Bob/);
+  assert.match(html, /Waiting for a signed transaction from a participant phone/);
   assert.match(html, /SLOT AVAILABLE/);
 });
 

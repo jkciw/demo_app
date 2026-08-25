@@ -118,6 +118,32 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
         self.send("BTC_TX|bob1|2/2|0708", "!bob", "Bob")
         self.assertEqual(["01020304", "05060708"], self.rpc.broadcasts)
 
+    def test_four_simultaneous_stations_complete_in_fifo_order(self):
+        stations = [
+            ("alice4", "!alice", "Alice", "01"),
+            ("bob4", "!bob", "Bob", "02"),
+            ("charlie4", "!charlie", "Charlie", "03"),
+            ("dana4", "!dana", "Dana", "04"),
+        ]
+        for session, source, sender, _payload in stations:
+            self.send(f"BTC_BEGIN|{session}|1", source, sender)
+
+        replies = [reply[0] for reply in self.replies]
+        self.assertIn("BTC_READY|alice4", replies)
+        self.assertIn("BTC_QUEUED|bob4|1", replies)
+        self.assertIn("BTC_QUEUED|charlie4|2", replies)
+        self.assertIn("BTC_QUEUED|dana4|3", replies)
+
+        for index, (session, source, sender, payload) in enumerate(stations):
+            self.send(f"BTC_TX|{session}|1/1|{payload}", source, sender)
+            self.send(f"BTC_RESULT_REQUEST|{session}", source, sender)
+            self.send(f"BTC_RESULT_ACK|{session}", source, sender)
+            if index + 1 < len(stations):
+                next_session = stations[index + 1][0]
+                self.assertIn(f"BTC_READY|{next_session}", [reply[0] for reply in self.replies])
+
+        self.assertEqual(["01", "02", "03", "04"], self.rpc.broadcasts)
+
     def test_result_request_waits_for_completed_transaction(self):
         self.send("BTC_BEGIN|pending1|2")
         self.send("BTC_TX|pending1|1/2|0102")

@@ -1,8 +1,8 @@
 # Meshtastic conference demo
 
 This standalone Android app is the Meshtastic half of the resilient communications demo. It uses
-the official Meshtastic SDK `0.1.0` over BLE and presents three visitor-facing destinations:
-**Alice**, **Bob**, and the laptop **Gateway**. Alice and Bob are sent node-addressed messages;
+the official Meshtastic SDK `0.1.0` over BLE and presents the other conference participants plus
+the **Gateway** as visitor-facing destinations. Alice, Bob, Charlie, and Dana receive node-addressed messages;
 **Everyone** remains an explicit public broadcast on primary channel `0`. Real inbound packets are
 grouped by contact, while broadcast delivery is labelled **relayed by mesh** rather than claiming
 that every node received it.
@@ -15,16 +15,17 @@ Build the one universal APK:
 ./gradlew :app:assembleDebug
 ```
 
-Install the same APK on every conference phone. On first launch choose **ALICE** or **BOB**. The
+Install the same APK on every conference phone. On first launch choose **ALICE**, **BOB**,
+**CHARLIE**, or **DANA**. The
 choice controls the visible station identity and selects an independent
 signed-transaction queue; it is saved locally.
 
-Alice and Bob are app identities, not radio identities. Each connected phone broadcasts a small
-`DEMO_PRESENCE` control frame after connecting and every five minutes. The laptop does the same
-for **Gateway**. The packet's Meshtastic source node is then mapped to Alice, Bob, or Gateway for
-ten minutes. This means the two LilyGo radios can be exchanged between the phones
+Alice, Bob, Charlie, and Dana are app identities, not radio identities. Each connected phone broadcasts a small
+`DEMO_PRESENCE` control frame after connecting and every five minutes. The Gateway does the same.
+The packet's Meshtastic source node is then mapped to a phone identity or Gateway for
+ten minutes. This means LilyGo radios can be exchanged between phones
 without swapping the visitor identities. Presence request and announcement frames are hidden from
-chat and from the laptop message wall. Radio long names are only a compatibility fallback.
+chat and from the Gateway message wall. Radio long names are only a compatibility fallback.
 
 Before the conference, pair each phone with its physically attached Meshtastic radio in Android
 Bluetooth settings and remove any stale Meshtastic pairings. On first launch the app checks the
@@ -35,7 +36,7 @@ remain off. The selection is stored only on the phone.
 
 The normal visitor flow does not show radio or identity controls. Long-press **RADIO READY** (or
 **RADIO OFFLINE**) in the top-right corner of the landing screen to open the operator console.
-That console can refresh presence, reconnect, change the paired radio, change Alice/Bob identity,
+That console can refresh presence, reconnect, change the paired radio, change the phone identity,
 detect duplicate identity claims, and reset the signed-transaction queue. **Change radio** always
 stops at the operator selection screen, even when only one Meshtastic radio is currently paired;
 only radios already paired in Android are listed. Pair a replacement in Android Bluetooth settings
@@ -44,7 +45,7 @@ or pressing Back preserves the working radio connection. The app disconnects onl
 operator selects a different bonded radio.
 
 Operator actions use consistent subpages. **Change phone identity** returns to the Operator Console
-when Back is pressed or Alice/Bob is selected. **Reconnect attached radio** opens a dedicated
+when Back is pressed or an identity is selected. **Reconnect attached radio** opens a dedicated
 progress screen and reports success or failure before returning to the Operator Console.
 
 After permission is granted, a foreground connected-device service owns the app's single
@@ -67,26 +68,26 @@ Meshtastic app closed so only one phone app owns each radio.
 
 ## Hardware proof
 
-Install the universal APK on M1 and M2. Select Alice on M1 and Bob on M2, then pair each phone
-with its attached radio. Confirm that each app shows the selected station and actual radio name.
-With Wi-Fi and cellular
-disabled, verify M1 → LT1 → LoRa → LT2 → M2, then repeat in reverse. The app cannot complete this
-test without the two phones and radios.
+Install the universal APK on four phones. Select Alice, Bob, Charlie, and Dana respectively, then
+pair each phone with its physically attached radio. Confirm that every app shows its selected
+identity and actual radio name. With Wi-Fi and cellular disabled, verify the direct-message ring
+Alice → Bob → Charlie → Dana → Alice, then send one broadcast from each phone. Full acceptance of
+this preview requires all four phones and radios; the proven two-phone build remains on `main`.
 
 This project links to GPL-3.0-or-later Meshtastic SDK code and is therefore maintained and
 distributed under GPL-3.0-or-later terms.
 
 ## Bitcoin Regtest relay
 
-The universal APK packages independent Alice and Bob Regtest transaction queues under
-`assets/regtest_transactions_alpha.txt` and `assets/regtest_transactions_bravo.txt`. The selected
-runtime station role chooses the queue. Replenish both queues from the live demo chain with
+The universal APK packages independent Alice, Bob, Charlie, and Dana Regtest transaction queues
+under `assets/regtest_transactions_*.txt`. The selected runtime station role chooses the queue.
+Replenish all four queues from the live demo chain with
 `laptop-dashboard/regtest/replenish_phone_transactions.py`. Each line is one complete signed raw
 transaction hex.
 
 On the home screen, **RELAY NEXT SIGNED TRANSACTION** first requests the Gateway's single upload
-slot. If Alice and Bob request it together, the first decoded request becomes active and the other
-phone shows its FIFO queue position. Only the active phone transmits chunks; the queued phone starts
+slot. If several phones request it together, the first decoded request becomes active and the others
+show their FIFO queue positions. Only the active phone transmits chunks; each queued phone starts
 automatically after the Gateway grants its turn. Other participant phones hide these frames from
 their chat inbox.
 
@@ -96,7 +97,7 @@ BTC_READY|<session>
 BTC_QUEUED|<session>|<position>
 ```
 
-The app then splits the hex into conservative 100-character chunks and uses:
+The app splits the current 191-byte Regtest transactions into two 200-character hex chunks and uses:
 
 ```text
 BTC_TX|<session>|<chunk>/<total>|<hex>
@@ -117,5 +118,5 @@ cd demo_app/laptop-dashboard
 ./dashboardctl start
 ```
 
-After replacing the development queues with the final 250 Alice and 250 Bob transactions,
+After replacing the development queues with the final transaction sets for all four identities,
 rebuild the universal APK with the same Gradle command shown above.

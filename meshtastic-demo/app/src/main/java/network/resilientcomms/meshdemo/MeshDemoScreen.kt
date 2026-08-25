@@ -860,7 +860,7 @@ private fun PresenceDiagnostics(state: MeshDemoState) {
             Text("LIVE PRESENCE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
             Spacer(Modifier.height(7.dp))
             Text(
-                "Identity follows each app, even when Alice and Bob exchange radios.",
+                "Identity follows each app, even when the four phones exchange radios.",
                 color = Muted,
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
@@ -1135,10 +1135,14 @@ private fun ContactsScreen(
     )
     Spacer(Modifier.height(22.dp))
 
-    state.recipients.firstOrNull { it.kind == RecipientKind.PERSON }?.let { recipient ->
+    val people = state.recipients.filter { it.kind == RecipientKind.PERSON }
+    if (people.isNotEmpty()) {
         ExperienceLabel("PERSON TO PERSON", "A familiar conversation")
         Spacer(Modifier.height(9.dp))
-        RecipientCard(recipient, onSelectRecipient)
+        people.forEachIndexed { index, recipient ->
+            RecipientCard(recipient, onSelectRecipient)
+            if (index < people.lastIndex) Spacer(Modifier.height(9.dp))
+        }
         Spacer(Modifier.height(20.dp))
     }
 
@@ -1542,7 +1546,7 @@ private fun BroadcastScreen(
                 Text("VISIBLE TO EVERYONE", color = Danger, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Alice, Bob and the Gateway can receive this announcement. It is not a private conversation.",
+                    "Alice, Bob, Charlie, Dana and the Gateway can receive this announcement. It is not a private conversation.",
                     color = Color.White,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,

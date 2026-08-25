@@ -7,6 +7,8 @@ type TransportState = {
   port: string | null;
   detail: string;
   knownNodes?: number;
+  modemPreset?: string;
+  region?: string;
   destinationHash?: string;
 };
 
@@ -166,8 +168,8 @@ export default function Home() {
             <p className="section-label">MESHTASTIC MESH</p>
             <dl>
               <div><dt>Known nodes</dt><dd>{meshtastic.knownNodes ?? "—"}</dd></div>
-              <div><dt>Channel</dt><dd>LongFast</dd></div>
-              <div><dt>Region</dt><dd>TW</dd></div>
+              <div><dt>Modem preset</dt><dd>{meshtastic.modemPreset ?? "—"}</dd></div>
+              <div><dt>Region</dt><dd>{meshtastic.region ?? "—"}</dd></div>
             </dl>
           </div>
 
@@ -199,7 +201,7 @@ export default function Home() {
           <div className="transaction-stream" aria-live="polite">
             {transactions.length === 0 && (
               <div className="transaction-empty">
-                Waiting for a signed transaction from Alice or Bob.
+                Waiting for a signed transaction from a participant phone.
               </div>
             )}
             {transactions.map((transaction) => {
