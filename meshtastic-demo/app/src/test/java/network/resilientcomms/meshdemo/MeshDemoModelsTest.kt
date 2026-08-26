@@ -117,8 +117,25 @@ class MeshDemoModelsTest {
     }
 
     @Test
+    fun signedTransaction_previewExplainsPackagedRegtestSpend() {
+        val rawHex = "0200000000010100416fdc347b37dab6fd6c0f3514636db192bb3d4094ee7adcac87f5874456711400000000fdffffff01583e0f00000000001600148b927f29fa2055410afc5c3972625358eca4bb400247304402204162fc54a21754a7f0ac8e1e736b5753bcfd0d3a3a300a517330a0cf1e65e3170220567fdc9014261dce687905290d26737177106fed5e5400ee4449c27d94eb198a0121034d3c3ae639616ee942cd51a06ca7a1a2a1ed7c4cedc9ee1439363ddcab6335c100000000"
+
+        val preview = requireNotNull(bitcoinTransactionPreview(rawHex))
+
+        assertEquals(999_000L, preview.outputSats)
+        assertEquals(1_000L, preview.feeSats)
+        assertEquals(1, preview.inputCount)
+        assertEquals(1, preview.outputCount)
+        assertEquals(191, preview.sizeBytes)
+        assertEquals(2, preview.loRaChunks)
+        assertTrue(preview.isSegwit)
+        assertEquals(null, bitcoinTransactionPreview("not-hex"))
+    }
+
+    @Test
     fun bitcoinReplies_parseAcknowledgementBroadcastConfirmationAndFailure() {
         assertEquals("BTC_BEGIN|alpha1|4", bitcoinBeginFrame("alpha1", 4))
+        assertEquals("BTC_CANCEL|alpha1", bitcoinCancelFrame("alpha1"))
         assertEquals("BTC_RESULT_REQUEST|alpha1", bitcoinResultRequestFrame("alpha1"))
         assertEquals("BTC_RESULT_ACK|alpha1", bitcoinResultAcknowledgementFrame("alpha1"))
         assertEquals(
@@ -155,7 +172,7 @@ class MeshDemoModelsTest {
     }
 
     @Test
-    fun bitcoinRelayOnlyEnablesForConnectedStationWithRemainingTransaction() {
+    fun bitcoinRelayUsesTheConnectedRadioAndChecksGatewayWhenItStarts() {
         val gateway = MeshRecipient(
             id = "gateway",
             nodeNumber = 77,
@@ -178,8 +195,24 @@ class MeshDemoModelsTest {
         assertFalse(ready.copy(bitcoinQueueIndex = 2).canRelayBitcoin)
         assertFalse(ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.SENDING).canRelayBitcoin)
         assertFalse(ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.QUEUED).canRelayBitcoin)
-        assertFalse(ready.copy(recipients = emptyList()).canOpenBitcoin)
-        assertFalse(ready.copy(recipients = listOf(gateway.copy(isAvailable = false))).canRelayBitcoin)
+        assertTrue(ready.copy(recipients = emptyList()).canOpenBitcoin)
+        assertTrue(ready.copy(recipients = listOf(gateway.copy(isAvailable = false))).canRelayBitcoin)
+        assertTrue(
+            ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.REQUESTING_GATEWAY)
+                .canCancelBitcoinRelay,
+        )
+        assertTrue(
+            ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.SENDING)
+                .canCancelBitcoinRelay,
+        )
+        assertFalse(
+            ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.WAITING_FOR_GATEWAY)
+                .canCancelBitcoinRelay,
+        )
+        assertTrue(
+            ready.copy(bitcoinRelayProgress = BitcoinRelayProgress.WAITING_FOR_GATEWAY)
+                .canLeaveBitcoinScreen,
+        )
     }
 
     @Test
@@ -232,6 +265,8 @@ class MeshDemoModelsTest {
         assertEquals(23, contacts[2].nodeNumber)
         assertTrue(contacts.take(3).all(MeshRecipient::isAvailable))
         assertEquals(LAPTOP_NODE_NUMBER, contacts[3].nodeNumber)
+        assertTrue(contacts[3].isAvailable)
+        assertEquals("Big screen · Gateway radio discovered", contacts[3].description)
         assertTrue(contacts[4].isBroadcast)
         assertEquals(null, contacts[4].nodeNumber)
     }
@@ -248,7 +283,7 @@ class MeshDemoModelsTest {
         assertEquals(11, available.first().nodeNumber)
         assertTrue(available.first().isAvailable)
         assertFalse(unavailable.first().isAvailable)
-        assertFalse(unavailable.first { it.kind == RecipientKind.GATEWAY }.isAvailable)
+        assertTrue(unavailable.first { it.kind == RecipientKind.GATEWAY }.isAvailable)
         assertEquals(null, unavailable.first { it.kind == RecipientKind.GATEWAY }.nodeNumber)
     }
 

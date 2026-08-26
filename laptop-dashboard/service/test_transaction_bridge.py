@@ -118,6 +118,49 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
         self.send("BTC_TX|bob1|2/2|0708", "!bob", "Bob")
         self.assertEqual(["01020304", "05060708"], self.rpc.broadcasts)
 
+    def test_active_upload_can_be_cancelled_before_submission(self):
+        self.send("BTC_BEGIN|cancel-active|2", "!alice", "Alice")
+        self.send("BTC_TX|cancel-active|1/2|0102", "!alice", "Alice")
+        self.send("BTC_BEGIN|bob-next|1", "!bob", "Bob")
+
+        self.send("BTC_CANCEL|cancel-active", "!alice", "Alice")
+
+        replies = [reply[0] for reply in self.replies]
+        self.assertIn("BTC_CANCELLED|cancel-active", replies)
+        self.assertIn("BTC_READY|bob-next", replies)
+        cancelled = next(
+            item for item in self.hub.snapshot()["transactions"]
+            if item["session"] == "cancel-active"
+        )
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertEqual(1, cancelled["chunksReceived"])
+        self.assertEqual([], self.rpc.broadcasts)
+
+    def test_queued_upload_can_be_cancelled_without_disturbing_active_slot(self):
+        self.send("BTC_BEGIN|alice-active|2", "!alice", "Alice")
+        self.send("BTC_BEGIN|bob-cancel|2", "!bob", "Bob")
+
+        self.send("BTC_CANCEL|bob-cancel", "!bob", "Bob")
+
+        replies = [reply[0] for reply in self.replies]
+        self.assertIn("BTC_CANCELLED|bob-cancel", replies)
+        self.assertNotIn("BTC_READY|bob-cancel", replies)
+        self.send("BTC_TX|alice-active|1/2|0102", "!alice", "Alice")
+        self.send("BTC_TX|alice-active|2/2|0304", "!alice", "Alice")
+        self.assertEqual(["01020304"], self.rpc.broadcasts)
+
+    def test_cancel_is_too_late_after_complete_payload_is_submitted(self):
+        self.send("BTC_BEGIN|too-late|1", "!alice", "Alice")
+        self.send("BTC_TX|too-late|1/1|0102", "!alice", "Alice")
+
+        self.send("BTC_CANCEL|too-late", "!alice", "Alice")
+
+        self.assertIn(
+            "BTC_CANCEL_TOO_LATE|too-late",
+            [reply[0] for reply in self.replies],
+        )
+        self.assertEqual(["0102"], self.rpc.broadcasts)
+
     def test_four_simultaneous_stations_complete_in_fifo_order(self):
         stations = [
             ("alice4", "!alice", "Alice", "01"),
@@ -172,6 +215,26 @@ class BitcoinTransactionBridgeTest(unittest.TestCase):
         reply_text = [reply[0] for reply in replies]
         self.assertIn("BTC_NACK|alice-stall|slot-timeout", reply_text)
         self.assertIn("BTC_READY|bob-waits", reply_text)
+
+    def test_idle_gateway_maintenance_expires_abandoned_active_slot(self):
+        now = [100.0]
+        replies = []
+        bridge = BitcoinTransactionBridge(
+            self.hub,
+            self.rpc,
+            lambda text, destination, channel: replies.append((text, destination, channel)),
+            executor=InlineExecutor(),
+            clock=lambda: now[0],
+        )
+        bridge.handle_text("BTC_BEGIN|abandoned|2", "!alice", "Alice", 0)
+
+        now[0] += 76.0
+
+        self.assertFalse(bridge.has_active_transfer)
+        self.assertIn(
+            "BTC_NACK|abandoned|slot-timeout",
+            [reply[0] for reply in replies],
+        )
 
     def test_invalid_hex_is_rejected_without_rpc(self):
         self.assertTrue(self.send("BTC_TX|broken1|1/1|not-hex"))

@@ -19,6 +19,7 @@ FRAME_PREFIX = "BTC_TX"
 BEGIN_PREFIX = "BTC_BEGIN"
 RESULT_REQUEST_PREFIX = "BTC_RESULT_REQUEST"
 RESULT_ACK_PREFIX = "BTC_RESULT_ACK"
+CANCEL_PREFIX = "BTC_CANCEL"
 MAX_CHUNKS = 512
 MAX_TRANSACTION_BYTES = 100_000
 SESSION_TTL_SECONDS = 10 * 60
@@ -249,12 +250,16 @@ class BitcoinTransactionBridge:
         self._incoming: dict[tuple[str, str], IncomingTransaction] = {}
         self._completed: dict[tuple[str, str], CompletedTransaction] = {}
         self._admissions: dict[tuple[str, str], Admission] = {}
+        self._submitted: set[tuple[str, str]] = set()
         self._active: Admission | None = None
         self._queued: deque[Admission] = deque()
 
     @property
     def has_active_transfer(self) -> bool:
         with self._lock:
+            # Presence traffic may be the only activity after a phone disappears.
+            # Expire an abandoned slot here as well as when the next frame arrives.
+            self._expire_sessions_locked()
             return self._active is not None
 
     def close(self) -> None:
@@ -275,6 +280,8 @@ class BitcoinTransactionBridge:
             return self._handle_result_request(stripped, source_id, channel)
         if stripped.startswith(f"{RESULT_ACK_PREFIX}|"):
             return self._handle_result_ack(stripped, source_id)
+        if stripped.startswith(f"{CANCEL_PREFIX}|"):
+            return self._handle_cancel(stripped, source_id, sender, channel)
         if not stripped.startswith(f"{FRAME_PREFIX}|"):
             return False
         session_hint = self._session_hint(text)
@@ -358,6 +365,9 @@ class BitcoinTransactionBridge:
                         self._reject_locked(incoming, "too-large")
                         return True
                     del self._incoming[key]
+                    # Bitcoin Core may receive the transaction after this point,
+                    # so a later cancel request cannot promise to undo the relay.
+                    self._submitted.add(key)
 
         self._safe_reply(f"BTC_CHUNK_ACK|{frame.session}|{frame.index}", source_id, channel)
         if raw_hex is not None:
@@ -551,6 +561,51 @@ class BitcoinTransactionBridge:
             self._send_completed(parts[1], completed, source_id, channel)
         return True
 
+    def _handle_cancel(
+        self,
+        text: str,
+        source_id: str,
+        sender: str,
+        channel: int,
+    ) -> bool:
+        parts = text.split("|")
+        if len(parts) != 2 or not SESSION_PATTERN.fullmatch(parts[1]):
+            return True
+        session = parts[1]
+        key = (source_id, session)
+        with self._lock:
+            if key in self._completed or key in self._submitted:
+                self._safe_reply(f"BTC_CANCEL_TOO_LATE|{session}", source_id, channel)
+                return True
+
+            admission = self._admissions.get(key)
+            if admission is None:
+                # Idempotent cancellation lets a phone safely retry this control frame.
+                self._safe_reply(f"BTC_CANCELLED|{session}", source_id, channel)
+                return True
+
+            incoming = self._incoming.get(key)
+            self.sink.upsert_transaction(
+                {
+                    "id": f"{source_id}:{session}",
+                    "session": session,
+                    "sender": sender,
+                    "sourceId": source_id,
+                    "status": "cancelled",
+                    "chunksReceived": len(incoming.chunks) if incoming is not None else 0,
+                    "chunksTotal": admission.total,
+                }
+            )
+            if self._active is not None and self._active.key == key:
+                self._finish_active_locked(key)
+            else:
+                self._incoming.pop(key, None)
+                self._admissions.pop(key, None)
+                self._queued = deque(item for item in self._queued if item.key != key)
+                self._refresh_queue_positions_locked()
+            self._safe_reply(f"BTC_CANCELLED|{session}", source_id, channel)
+        return True
+
     def _activate_locked(self, admission: Admission) -> None:
         self._active = admission
         admission.updated_at = self.clock()
@@ -601,6 +656,7 @@ class BitcoinTransactionBridge:
     def _finish_active_locked(self, key: tuple[str, str]) -> None:
         self._incoming.pop(key, None)
         self._admissions.pop(key, None)
+        self._submitted.discard(key)
         if self._active is None or self._active.key != key:
             self._refresh_queue_positions_locked()
             return

@@ -30,6 +30,7 @@ h1 { margin:0; font-size:clamp(28px,3vw,46px); letter-spacing:-.04em; }
 .online { background:rgba(86,242,170,.12); color:var(--green); }
 .standby { background:rgba(255,189,89,.1); color:var(--amber); }
 .connecting { background:rgba(112,200,255,.1); color:var(--blue); }
+.reconnecting { background:rgba(255,189,89,.1); color:var(--amber); }
 .error { background:rgba(255,105,105,.12); color:#ff8383; }
 .destination-card { margin-top:24px; padding:16px; border:1px solid rgba(112,200,255,.24); border-radius:13px; background:rgba(112,200,255,.05); }
 .destination-card code { display:block; overflow-wrap:anywhere; color:#d7f1ff; font:11px/1.55 var(--font-geist-mono),monospace; }
@@ -51,6 +52,7 @@ dd { margin:0; font:700 12px var(--font-geist-mono),monospace; }
 .gateway-slot-summary span { padding:6px 9px; border-radius:6px; font:700 9px var(--font-geist-mono),monospace; letter-spacing:.08em; }
 .gateway-slot-summary span.active { color:var(--amber); background:rgba(255,189,89,.1); }
 .gateway-slot-summary span.available { color:var(--green); background:rgba(86,242,170,.1); }
+.gateway-slot-summary span.unavailable { color:#ff8383; background:rgba(255,105,105,.12); }
 .gateway-slot-summary small { color:var(--muted); font:9px var(--font-geist-mono),monospace; }
 .transaction-stream { display:grid; gap:10px; padding:14px; }
 .transaction-empty { padding:28px; border:1px dashed var(--line); border-radius:11px; color:var(--muted); text-align:center; font-size:13px; }

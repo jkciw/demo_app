@@ -44,6 +44,7 @@ class MeshDemoViewModel(application: Application) : AndroidViewModel(application
     fun send() = withSession { send() }
     fun startOver() = withSession { startOver() }
     fun relayNextBitcoinTransaction() = withSession { relayNextBitcoinTransaction() }
+    fun cancelBitcoinRelay() = withSession { cancelBitcoinRelay() }
     fun resetBitcoinQueue() = withSession { resetBitcoinQueue() }
 
     private fun withSession(action: MeshtasticSession.() -> Unit) =

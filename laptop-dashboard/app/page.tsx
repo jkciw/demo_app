@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 type TransportState = {
-  status: "standby" | "connecting" | "online" | "error";
+  status: "standby" | "connecting" | "reconnecting" | "online" | "error";
   port: string | null;
   detail: string;
   knownNodes?: number;
@@ -145,6 +145,15 @@ export default function Home() {
     ["reserved", "receiving", "broadcasting", "mining"].includes(transaction.status),
   );
   const queuedTransactions = transactions.filter((transaction) => transaction.status === "queued");
+  const gatewayRadioOnline = serviceOnline && meshtastic.status === "online";
+  const gatewayReady = gatewayRadioOnline && bitcoin.status === "online";
+  const slotLabel = activeTransaction
+    ? `ACTIVE · ${activeTransaction.sender}`
+    : !gatewayRadioOnline
+      ? "RADIO OFFLINE"
+      : bitcoin.status !== "online"
+        ? "BITCOIN CORE OFFLINE"
+        : "SLOT AVAILABLE";
 
   return (
     <main className="dashboard-shell">
@@ -192,8 +201,8 @@ export default function Home() {
           <div className="transaction-heading">
             <div><p className="section-label">BITCOIN / REGTEST</p><h2>Transaction relay</h2></div>
             <div className="gateway-slot-summary">
-              <span className={activeTransaction ? "active" : "available"}>
-                {activeTransaction ? `ACTIVE · ${activeTransaction.sender}` : "SLOT AVAILABLE"}
+              <span className={activeTransaction ? "active" : gatewayReady ? "available" : "unavailable"}>
+                {slotLabel}
               </span>
               <small>{queuedTransactions.length} queued</small>
             </div>
@@ -201,7 +210,9 @@ export default function Home() {
           <div className="transaction-stream" aria-live="polite">
             {transactions.length === 0 && (
               <div className="transaction-empty">
-                Waiting for a signed transaction from a participant phone.
+                {gatewayReady
+                  ? "Waiting for a signed transaction from a participant phone."
+                  : "Transaction relay will open when both the Gateway radio and Bitcoin Core are online."}
               </div>
             )}
             {transactions.map((transaction) => {

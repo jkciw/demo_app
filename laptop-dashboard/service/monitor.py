@@ -207,53 +207,100 @@ class MeshtasticAdapter(threading.Thread):
         )
 
     def run(self) -> None:
-        self.hub.update_transport(
-            "meshtastic", status="connecting", port=self.port, detail="Opening radio"
-        )
-        try:
-            from pubsub import pub
-            from meshtastic.serial_interface import SerialInterface
+        from pubsub import pub
+        from meshtastic.serial_interface import SerialInterface
 
-            pub.subscribe(self._on_text, "meshtastic.receive.text")
-            # ESP32-S3 firmware can corrupt serial protobuf frames while replaying a
-            # full NodeDB during host startup. Conference identities are learned from
-            # lightweight presence frames, so the collector deliberately skips that
-            # unnecessary replay and keeps the live serial stream reliable.
-            self.interface = SerialInterface(devPath=self.port, noNodes=True)
-            threading.Thread(
-                target=self._transaction_reply_loop,
-                name="meshtastic-bitcoin-replies",
-                daemon=True,
-            ).start()
-            threading.Thread(
-                target=self._presence_loop,
-                name="meshtastic-gateway-presence",
-                daemon=True,
-            ).start()
-            node_count = len(getattr(self.interface, "nodes", {}) or {})
-            radio_config = radio_configuration(self.interface)
-            preset = radio_config.get("modemPreset", "Unknown preset")
-            region = radio_config.get("region", "Unknown region")
-            self.hub.update_transport(
-                "meshtastic",
-                status="online",
-                port=self.port,
-                detail=f"{preset} / {region}",
-                knownNodes=node_count,
-                **radio_config,
-            )
-            self.stop_event.wait()
-        except Exception as exc:
-            self.hub.update_transport(
-                "meshtastic", status="error", port=self.port, detail=str(exc)
-            )
+        pub.subscribe(self._on_text, "meshtastic.receive.text")
+        threading.Thread(
+            target=self._transaction_reply_loop,
+            name="meshtastic-bitcoin-replies",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=self._presence_loop,
+            name="meshtastic-gateway-presence",
+            daemon=True,
+        ).start()
+        try:
+            while not self.stop_event.is_set():
+                self.hub.update_transport(
+                    "meshtastic", status="connecting", port=self.port, detail="Opening Gateway radio"
+                )
+                try:
+                    # ESP32-S3 firmware can corrupt serial protobuf frames while replaying a
+                    # full NodeDB during host startup. Conference identities are learned from
+                    # lightweight presence frames, so the collector deliberately skips that
+                    # unnecessary replay and keeps the live serial stream reliable.
+                    # Build first, then connect explicitly. SerialInterface's default
+                    # constructor calls connect() and subsequently waitForConfig() a
+                    # second time. On a radio that misses the first handshake that
+                    # redundant wait can enter the library's blocking cleanup path and
+                    # leave this adapter permanently stuck at "connecting".
+                    interface = SerialInterface(
+                        devPath=self.port,
+                        noNodes=True,
+                        connectNow=False,
+                        timeout=20,
+                    )
+                    try:
+                        interface.connect()
+                    except Exception:
+                        # Avoid SerialInterface.close() here: when startup is only
+                        # partially complete it may wait indefinitely for its reader
+                        # thread. Closing the stream releases the USB port immediately
+                        # so the outer retry loop can recover.
+                        interface._wantExit = True
+                        stream = getattr(interface, "stream", None)
+                        if stream is not None:
+                            interface.stream = None
+                            stream.close()
+                        raise
+                    self.interface = interface
+                    node_count = len(getattr(interface, "nodes", {}) or {})
+                    radio_config = radio_configuration(interface)
+                    preset = radio_config.get("modemPreset", "Unknown preset")
+                    region = radio_config.get("region", "Unknown region")
+                    self.hub.update_transport(
+                        "meshtastic",
+                        status="online",
+                        port=self.port,
+                        detail=f"{preset} / {region}",
+                        knownNodes=node_count,
+                        **radio_config,
+                    )
+                    self._send_gateway_presence()
+                    while not self.stop_event.wait(1.0):
+                        # This property also expires an abandoned upload slot, so
+                        # a vanished phone cannot leave the Gateway blocked indefinitely.
+                        self.transaction_bridge.has_active_transfer
+                        stream = getattr(interface, "stream", None)
+                        if stream is None or not getattr(stream, "is_open", True):
+                            raise ConnectionError("Gateway radio serial link disconnected")
+                except Exception as exc:
+                    if not self.stop_event.is_set():
+                        print(f"Gateway radio reconnecting: {exc}", flush=True)
+                        self.hub.update_transport(
+                            "meshtastic",
+                            status="reconnecting",
+                            port=self.port,
+                            detail=f"{exc} · retrying",
+                        )
+                finally:
+                    old_interface = self.interface
+                    self.interface = None
+                    if old_interface is not None:
+                        try:
+                            old_interface.close()
+                        except Exception:
+                            pass
+                if not self.stop_event.wait(2.0):
+                    continue
         finally:
             self.transaction_bridge.close()
-            if self.interface is not None:
-                try:
-                    self.interface.close()
-                except Exception:
-                    pass
+            try:
+                pub.unsubscribe(self._on_text, "meshtastic.receive.text")
+            except Exception:
+                pass
 
     def _on_text(self, packet: dict[str, Any], interface: Any = None) -> None:
         decoded = packet.get("decoded", {})
@@ -271,6 +318,10 @@ class MeshtasticAdapter(threading.Thread):
         if presence is not None:
             identity, _session = presence
             self._record_presence(source, identity)
+            # A participant may connect after the Gateway's startup announcement.
+            # Answer its first presence promptly instead of waiting up to five minutes.
+            if identity != "GATEWAY":
+                self._presence_wakeup.set()
             return
 
         sender = self._presence_names.get(source) or NODE_NAMES.get(source, source)

@@ -150,6 +150,7 @@ fun MeshDemoApp(
                         BitcoinScreen(
                             state = state,
                             onRelay = viewModel::relayNextBitcoinTransaction,
+                            onAbort = viewModel::cancelBitcoinRelay,
                             onReset = viewModel::resetBitcoinQueue,
                             onBack = viewModel::returnHome,
                         )
@@ -407,21 +408,19 @@ private fun ExperienceSheet(state: MeshDemoState, onMessage: () -> Unit, onBitco
                 ExperienceTile("↗", "Send a mesh\nmessage", Cyan, enabled = true, onClick = onMessage)
                 ExperienceTile(
                     symbol = "₿",
-                    title = if (state.isGatewayAvailable) "Relay\nBitcoin" else "Gateway\nnot visible",
+                    title = "Relay\nBitcoin",
                     accent = BitcoinOrange,
                     enabled = state.canOpenBitcoin,
                     onClick = onBitcoin,
                 )
             }
-            if (!state.isGatewayAvailable) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "Bitcoin relay becomes available when the Gateway node appears on the mesh.",
-                    color = Muted,
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp,
-                )
-            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Gateway availability is checked when a relay begins.",
+                color = Muted,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+            )
         }
     }
 }
@@ -920,6 +919,7 @@ private fun Int.asNodeId(): String = "!${toUInt().toString(16)}"
 private fun BitcoinScreen(
     state: MeshDemoState,
     onRelay: () -> Unit,
+    onAbort: () -> Unit,
     onReset: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -950,15 +950,120 @@ private fun BitcoinScreen(
         }
     }
     Spacer(Modifier.height(16.dp))
-    BitcoinRelayCard(state, onRelay, onReset)
+    state.bitcoinPreview?.takeIf { state.bitcoinRemaining > 0 }?.let { preview ->
+        BitcoinTransactionPreviewCard(preview)
+        Spacer(Modifier.height(16.dp))
+    }
+    BitcoinRelayCard(state, onRelay, onAbort, onReset)
     Spacer(Modifier.height(16.dp))
-    SecondaryButton("BACK TO DEMOS", onBack, enabled = !state.isBitcoinRelayActive)
+    SecondaryButton(
+        if (state.bitcoinRelayProgress in setOf(
+                BitcoinRelayProgress.WAITING_FOR_GATEWAY,
+                BitcoinRelayProgress.BROADCAST,
+            )
+        ) {
+            "CONTINUE IN BACKGROUND"
+        } else {
+            "BACK TO DEMOS"
+        },
+        onBack,
+        enabled = state.canLeaveBitcoinScreen,
+    )
 }
+
+@Composable
+private fun BitcoinTransactionPreviewCard(preview: BitcoinTransactionPreview) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = BitcoinOrange.copy(alpha = 0.10f)),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, BitcoinOrange.copy(alpha = 0.38f), RoundedCornerShape(18.dp)),
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Text("READY TO BROADCAST", color = BitcoinOrange, fontSize = 11.sp, fontWeight = FontWeight.Black)
+            Spacer(Modifier.height(7.dp))
+            Text(
+                "${preview.outputSats.asBitcoin()} BTC",
+                color = Color.White,
+                fontSize = 27.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "${preview.outputSats.withThousands()} sats · Regtest funds",
+                color = Muted,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TransactionFact(
+                    label = "SPENDS",
+                    value = "${preview.inputCount} funded input${if (preview.inputCount == 1) "" else "s"}",
+                    modifier = Modifier.weight(1f),
+                )
+                TransactionFact(
+                    label = "CREATES",
+                    value = "${preview.outputCount} output${if (preview.outputCount == 1) "" else "s"}",
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TransactionFact(
+                    label = "MINER FEE",
+                    value = preview.feeSats?.let { "${it.withThousands()} sats" } ?: "Unknown",
+                    modifier = Modifier.weight(1f),
+                )
+                TransactionFact(
+                    label = "OVER LORA",
+                    value = "${preview.loRaChunks} chunks",
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(Modifier.height(15.dp))
+            Text(
+                buildString {
+                    append(if (preview.isSegwit) "SIGNED SEGWIT" else "SIGNED BITCOIN")
+                    append("  ·  ${preview.sizeBytes} BYTES  ·  REGTEST ONLY")
+                },
+                color = BitcoinOrange,
+                fontSize = 10.sp,
+                lineHeight = 15.sp,
+                fontWeight = FontWeight.Black,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TransactionFact(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(label, color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(3.dp))
+        Text(value, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+private fun Long.asBitcoin(): String {
+    val whole = this / 100_000_000L
+    val fraction = (this % 100_000_000L).toString().padStart(8, '0')
+    return "$whole.$fraction"
+}
+
+private fun Long.withThousands(): String =
+    toString().reversed().chunked(3).joinToString(",").reversed()
 
 @Composable
 private fun BitcoinRelayCard(
     state: MeshDemoState,
     onRelay: () -> Unit,
+    onAbort: () -> Unit,
     onReset: () -> Unit,
 ) {
     Card(
@@ -981,12 +1086,8 @@ private fun BitcoinRelayCard(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                if (state.isGatewayAvailable) {
-                    "${state.bitcoinRemaining} remaining · Gateway ${state.gatewayNodeNumber?.asNodeId()} online"
-                } else {
-                    "${state.bitcoinRemaining} remaining · waiting for Gateway presence"
-                },
-                color = if (state.isGatewayAvailable) Muted else Danger,
+                "${state.bitcoinRemaining} remaining · Gateway checked at relay start",
+                color = Muted,
                 fontSize = 12.sp,
             )
             Spacer(Modifier.height(14.dp))
@@ -994,16 +1095,8 @@ private fun BitcoinRelayCard(
                 BitcoinConfirmationWait(state.bitcoinStatusText)
             } else {
                 Text(
-                    if (!state.isGatewayAvailable && !state.isBitcoinRelayActive) {
-                        "Gateway is not currently visible on the mesh"
-                    } else {
-                        state.bitcoinStatusText
-                    },
-                    color = if (!state.isGatewayAvailable && !state.isBitcoinRelayActive) {
-                        Danger
-                    } else {
-                        bitcoinStatusColor(state.bitcoinRelayProgress)
-                    },
+                    state.bitcoinStatusText,
+                    color = bitcoinStatusColor(state.bitcoinRelayProgress),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -1029,11 +1122,21 @@ private fun BitcoinRelayCard(
             if (state.bitcoinRemaining > 0) {
                 val label = when {
                     state.isBitcoinRelayActive -> "RELAY IN PROGRESS"
-                    !state.isGatewayAvailable -> "WAITING FOR GATEWAY"
                     state.bitcoinRelayProgress == BitcoinRelayProgress.FAILED -> "RETRY SIGNED TRANSACTION"
                     else -> "RELAY NEXT SIGNED TRANSACTION"
                 }
                 PrimaryButton(label, onRelay, state.canRelayBitcoin)
+                if (state.canCancelBitcoinRelay) {
+                    Spacer(Modifier.height(10.dp))
+                    SecondaryButton("ABORT THIS RELAY", onAbort, enabled = true)
+                    Spacer(Modifier.height(7.dp))
+                    Text(
+                        "Stops this upload and keeps the signed transaction ready to retry.",
+                        color = Muted,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                    )
+                }
             } else {
                 PrimaryButton("RESET DEVELOPMENT QUEUE", onReset, !state.isBitcoinRelayActive)
             }
@@ -1443,7 +1546,7 @@ private fun GatewayServicesScreen(
         ExperienceHeader(
             symbol = "▣",
             title = "Gateway Services",
-            subtitle = if (recipient.isAvailable) "LoRa bridge online" else "Waiting for the Gateway node",
+            subtitle = "Availability checked when you send",
             accent = BitcoinOrange,
         )
         Spacer(Modifier.height(12.dp))

@@ -62,7 +62,14 @@ class MeshtasticSession(
     private val savedRadioAddress = preferences.getString(SELECTED_RADIO_ADDRESS_KEY, null)
     private val savedRadioName = preferences.getString(SELECTED_RADIO_NAME_KEY, null)
     private val _state = MutableStateFlow(
-        initialState(initialRole, initialTransactions.size, initialQueueIndex, savedRadioAddress, savedRadioName),
+        initialState(
+            initialRole,
+            initialTransactions.size,
+            initialQueueIndex,
+            initialTransactions.getOrNull(initialQueueIndex)?.let(::bitcoinTransactionPreview),
+            savedRadioAddress,
+            savedRadioName,
+        ),
     )
     val state: StateFlow<MeshDemoState> = _state.asStateFlow()
 
@@ -79,6 +86,7 @@ class MeshtasticSession(
     private var client: RadioClient? = null
     private var bitcoinRelayJob: Job? = null
     private var connectJob: Job? = null
+    private var bondCompletionJob: Job? = null
     private var discoveryJob: Job? = null
     private var recoveryJob: Job? = null
     private var radioChangeJob: Job? = null
@@ -132,6 +140,7 @@ class MeshtasticSession(
                 selectedRecipient = null,
                 bitcoinQueueIndex = queueIndex,
                 bitcoinQueueTotal = transactions.size,
+                bitcoinPreview = transactions.getOrNull(queueIndex)?.let(::bitcoinTransactionPreview),
                 bitcoinRelayProgress = BitcoinRelayProgress.IDLE,
                 bitcoinStatusText = if (transactions.isEmpty()) {
                     "No signed transactions packaged"
@@ -169,6 +178,7 @@ class MeshtasticSession(
                 step = DemoStep.HOME,
                 bitcoinQueueIndex = 0,
                 bitcoinQueueTotal = 0,
+                bitcoinPreview = null,
                 bitcoinRelayProgress = BitcoinRelayProgress.IDLE,
                 bitcoinStatusText = "Select a station queue",
                 bitcoinSession = null,
@@ -405,6 +415,8 @@ class MeshtasticSession(
         }
         desiredRadioAddress = address
         desiredRadioName = name
+        bondCompletionJob?.cancel()
+        bondCompletionJob = null
         connectJob?.cancel()
         recoveryJob?.cancel()
         recoveryJob = null
@@ -601,6 +613,8 @@ class MeshtasticSession(
         }
         desiredRadioAddress = address
         desiredRadioName = name
+        bondCompletionJob?.cancel()
+        bondCompletionJob = null
         connectJob?.cancel()
         recoveryJob?.cancel()
         recoveryJob = null
@@ -630,12 +644,41 @@ class MeshtasticSession(
         if (!selectedAddress.equals(address, ignoreCase = true)) return
         Log.i(TAG, "Bond state changed address=$address previous=$previousState current=$currentState")
 
-        val storedBondRejected =
-            previousState == BluetoothDevice.BOND_BONDED && currentState == BluetoothDevice.BOND_BONDING
         val bondRemoved = previousState != BluetoothDevice.BOND_NONE && currentState == BluetoothDevice.BOND_NONE
-        if (!storedBondRejected && !bondRemoved) return
-
         val displayName = _state.value.selectedRadioName ?: _state.value.radioDisplayName
+
+        if (currentState == BluetoothDevice.BOND_BONDING) {
+            // A protected Meshtastic characteristic can legitimately ask Android
+            // to refresh an existing bond. Keep the live GATT session open so the
+            // system pairing dialog and radio can complete that exchange.
+            desiredRadioAddress = address
+            desiredRadioName = _state.value.selectedRadioName
+            _state.update {
+                it.copy(
+                    radioStatus = RadioStatus.CONNECTING,
+                    statusText = "Confirm the pairing code shown on $displayName",
+                )
+            }
+            return
+        }
+
+        if (currentState == BluetoothDevice.BOND_BONDED) {
+            desiredRadioAddress = address
+            desiredRadioName = _state.value.selectedRadioName
+            _state.update {
+                it.copy(
+                    radioStatus = RadioStatus.CONNECTING,
+                    statusText = "Pairing confirmed · finishing connection to $displayName…",
+                )
+            }
+            scheduleConnectionAfterBond(address, _state.value.selectedRadioName)
+            return
+        }
+
+        if (!bondRemoved) return
+
+        bondCompletionJob?.cancel()
+        bondCompletionJob = null
         desiredRadioAddress = null
         desiredRadioName = null
         connectJob?.cancel()
@@ -648,11 +691,7 @@ class MeshtasticSession(
             _state.update {
                 it.copy(
                     radioStatus = RadioStatus.PAIRING_REQUIRED,
-                    statusText = if (storedBondRejected) {
-                        "$displayName rejected the stored bond · automatic recovery stopped"
-                    } else {
-                        "$displayName is not paired · use Reconnect attached radio to pair once"
-                    },
+                    statusText = "$displayName pairing did not complete · use Reconnect attached radio to try again",
                 )
             }
         }
@@ -665,7 +704,7 @@ class MeshtasticSession(
     }
 
     fun returnHome() {
-        if (_state.value.isBitcoinRelayActive) return
+        if (!_state.value.canLeaveBitcoinScreen) return
         _state.update { it.copy(step = DemoStep.HOME) }
     }
 
@@ -757,6 +796,7 @@ class MeshtasticSession(
                 it.copy(
                     bitcoinRelayProgress = BitcoinRelayProgress.SENDING,
                     bitcoinStatusText = "Preparing transaction ${queueIndex + 1} of ${signedTransactions.size}",
+                    bitcoinPreview = bitcoinTransactionPreview(rawHex),
                     bitcoinSession = session,
                     bitcoinCurrentChunk = 0,
                     bitcoinTotalChunks = chunks.size,
@@ -942,6 +982,7 @@ class MeshtasticSession(
                 _state.update {
                     it.copy(
                         bitcoinQueueIndex = nextIndex,
+                        bitcoinPreview = signedTransactions.getOrNull(nextIndex)?.let(::bitcoinTransactionPreview),
                         bitcoinRelayProgress = BitcoinRelayProgress.CONFIRMED,
                         bitcoinStatusText = "Confirmed in Regtest block ${confirmedResult.blockHeight}",
                         bitcoinTxid = confirmedResult.txid,
@@ -978,6 +1019,47 @@ class MeshtasticSession(
         }
     }
 
+    fun cancelBitcoinRelay() {
+        val cancelState = _state.value
+        if (!cancelState.canCancelBitcoinRelay) return
+        val session = cancelState.bitcoinSession ?: return
+        val relayJob = bitcoinRelayJob
+        val radioClient = client
+
+        scope.launch {
+            if (radioClient != null) {
+                withTimeoutOrNull(BITCOIN_CANCEL_SEND_TIMEOUT_MS) {
+                    runCatching {
+                        radioClient.sendText(
+                            text = bitcoinCancelFrame(session),
+                            to = NodeId.BROADCAST,
+                            channel = ChannelIndex(0),
+                        )
+                    }.onFailure { exception ->
+                        Log.w(TAG, "Could not notify Gateway of cancelled session=$session", exception)
+                    }
+                }
+            }
+            relayJob?.cancel()
+            relayJob?.join()
+            if (_state.value.bitcoinSession == session) {
+                _state.update {
+                    it.copy(
+                        bitcoinRelayProgress = BitcoinRelayProgress.IDLE,
+                        bitcoinStatusText = "Relay aborted · signed transaction is still available",
+                        bitcoinSession = null,
+                        bitcoinCurrentChunk = 0,
+                        bitcoinTotalChunks = 0,
+                        bitcoinTxid = null,
+                        bitcoinBlockHeight = null,
+                    )
+                }
+            }
+            if (bitcoinRelayJob === relayJob) bitcoinRelayJob = null
+            Log.i(TAG, "Bitcoin relay aborted session=$session")
+        }
+    }
+
     fun resetBitcoinQueue() {
         if (_state.value.isBitcoinRelayActive) return
         val role = _state.value.stationRole ?: return
@@ -985,6 +1067,9 @@ class MeshtasticSession(
         _state.update {
             it.copy(
                 bitcoinQueueIndex = 0,
+                bitcoinPreview = signedTransactionsByRole[role]
+                    ?.firstOrNull()
+                    ?.let(::bitcoinTransactionPreview),
                 bitcoinRelayProgress = BitcoinRelayProgress.IDLE,
                 bitcoinStatusText = "Signed transaction ready",
                 bitcoinSession = null,
@@ -1016,6 +1101,8 @@ class MeshtasticSession(
         discoveryJob = null
         desiredRadioAddress = null
         desiredRadioName = null
+        bondCompletionJob?.cancel()
+        bondCompletionJob = null
         connectJob?.cancel()
         connectJob = null
         recoveryJob?.cancel()
@@ -1031,6 +1118,8 @@ class MeshtasticSession(
                 _state.update { it.withConnection(connection) }
                 if (connection is ConnectionState.Connected) {
                     reachedConnected = true
+                    bondCompletionJob?.cancel()
+                    bondCompletionJob = null
                     startPresenceLoop(radioClient)
                     startBleKeepalive(radioClient)
                 }
@@ -1072,19 +1161,13 @@ class MeshtasticSession(
                     null -> Unit
                 }
                 if (text.startsWith("BTC_")) {
-                    val current = _state.value
-                    if (
-                        isGatewaySource(
-                            nodeNumber = packet.from,
-                            presences = current.presences,
-                            expectedGatewayNodeNumber = current.gatewayNodeNumber,
-                        )
-                    ) {
-                        val reply = parseBitcoinReply(text)
-                        if (reply != null) {
-                            bitcoinReplies.emit(reply)
-                            Log.i(TAG, "Bitcoin reply=$reply")
-                        }
+                    // The relay session ID is the correlation key. Requiring a
+                    // separate presence announcement here can discard a perfectly
+                    // valid BTC_READY/result reply after the Gateway restarts.
+                    val reply = parseBitcoinReply(text)
+                    if (reply != null) {
+                        bitcoinReplies.emit(reply)
+                        Log.i(TAG, "Bitcoin reply=$reply source=${packet.from}")
                     }
                     // Bitcoin chunks and replies use the shared primary channel for
                     // reliability. They are reserved protocol traffic, not chat messages.
@@ -1159,6 +1242,18 @@ class MeshtasticSession(
     }
 
     private fun stopForMissingBond(address: String, name: String?) {
+        if (isRadioBonding(address)) {
+            val displayName = name ?: _state.value.radioDisplayName
+            _state.update {
+                it.copy(
+                    radioStatus = RadioStatus.CONNECTING,
+                    statusText = "Confirm the pairing code shown on $displayName",
+                )
+            }
+            return
+        }
+        bondCompletionJob?.cancel()
+        bondCompletionJob = null
         if (desiredRadioAddress == address) {
             desiredRadioAddress = null
             desiredRadioName = null
@@ -1173,6 +1268,38 @@ class MeshtasticSession(
                 radioStatus = RadioStatus.PAIRING_REQUIRED,
                 statusText = "$displayName is not paired · use Reconnect attached radio to pair once",
             )
+        }
+    }
+
+    private fun scheduleConnectionAfterBond(address: String, name: String?) {
+        bondCompletionJob?.cancel()
+        bondCompletionJob = scope.launch {
+            // In the normal case the in-flight GATT connection continues by itself.
+            // If the SDK stopped while Android was pairing, rebuild it once after a
+            // generous settling window instead of creating competing GATT clients.
+            delay(BOND_COMPLETION_GRACE_MS)
+            if (desiredRadioAddress != address || !isRadioBonded(address)) return@launch
+            if (client?.connection?.value is ConnectionState.Connected) return@launch
+            Log.i(TAG, "Pairing completed but GATT is not connected; rebuilding session radio=${name ?: address}")
+            connectJob?.cancel()
+            recoveryJob?.cancel()
+            recoveryJob = null
+            connectJob = scope.launch {
+                connectOnce(address, name, isRecovery = true)
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun isRadioBonding(address: String): Boolean {
+        val adapter = application.getSystemService(BluetoothManager::class.java)?.adapter ?: return false
+        return try {
+            adapter.getRemoteDevice(address).bondState == BluetoothDevice.BOND_BONDING
+        } catch (exception: IllegalArgumentException) {
+            false
+        } catch (exception: SecurityException) {
+            permissionRequired()
+            false
         }
     }
 
@@ -1426,6 +1553,7 @@ class MeshtasticSession(
         const val BLE_SCAN_WINDOW_MS = 5_000L
         const val BLE_SCAN_FEEDBACK_MS = 650L
         const val BLE_DISCONNECT_TIMEOUT_MS = 2_000L
+        const val BOND_COMPLETION_GRACE_MS = 20_000L
         const val BITCOIN_CHUNK_ATTEMPTS = 3
         const val BITCOIN_SLOT_ATTEMPTS = 12
         const val BITCOIN_SLOT_REPLY_TIMEOUT_MS = 45_000L
@@ -1439,6 +1567,7 @@ class MeshtasticSession(
         const val BITCOIN_RESULT_RETRY_MAX_MS = 7_000L
         const val BITCOIN_RESULT_ACK_ATTEMPTS = 2
         const val BITCOIN_RESULT_ACK_RETRY_MS = 1_000L
+        const val BITCOIN_CANCEL_SEND_TIMEOUT_MS = 5_000L
         const val RECOVERY_INITIAL_DELAY_MS = 1_000L
         const val RECOVERY_MAX_DELAY_MS = 15_000L
         const val PRESENCE_INITIAL_DELAY_MS = 5_000L
@@ -1467,6 +1596,7 @@ class MeshtasticSession(
             stationRole: StationRole?,
             queueTotal: Int,
             queueIndex: Int,
+            bitcoinPreview: BitcoinTransactionPreview?,
             savedAddress: String?,
             savedName: String?,
         ): MeshDemoState = MeshDemoState(
@@ -1484,6 +1614,7 @@ class MeshtasticSession(
             recipients = stationRole?.let { conferenceRecipients(it, emptyList()) }.orEmpty(),
             bitcoinQueueTotal = queueTotal,
             bitcoinQueueIndex = queueIndex,
+            bitcoinPreview = bitcoinPreview,
             bitcoinStatusText = if (queueTotal == 0) {
                 "No signed transactions packaged"
             } else {

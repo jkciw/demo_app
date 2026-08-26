@@ -37,8 +37,8 @@ test("server-renders the conference dashboard and Bitcoin relay", async () => {
   assert.match(html, /BITCOIN \/ REGTEST/);
   assert.match(html, /RPC port/);
   assert.match(html, />18443</);
-  assert.match(html, /Waiting for a signed transaction from a participant phone/);
-  assert.match(html, /SLOT AVAILABLE/);
+  assert.match(html, /Transaction relay will open when both the Gateway radio and Bitcoin Core are online/);
+  assert.match(html, /RADIO OFFLINE/);
 });
 
 test("client subscribes to collector snapshots and renders relay states", async () => {

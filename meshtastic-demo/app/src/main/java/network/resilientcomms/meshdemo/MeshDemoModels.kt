@@ -5,6 +5,7 @@ package network.resilientcomms.meshdemo
 
 internal const val MAX_TEXT_BYTES = 233
 internal const val BITCOIN_CHUNK_HEX_CHARS = 200
+internal const val DEMO_BITCOIN_INPUT_SATS = 1_000_000L
 internal const val LAPTOP_NODE_NUMBER = 0x2303A141
 internal const val PRESENCE_TTL_MS = 10 * 60 * 1000L
 internal const val PRESENCE_PREFIX = "DEMO_PRESENCE"
@@ -167,6 +168,16 @@ data class SentText(
     val recordedAtMs: Long,
 )
 
+data class BitcoinTransactionPreview(
+    val outputSats: Long,
+    val feeSats: Long?,
+    val inputCount: Int,
+    val outputCount: Int,
+    val sizeBytes: Int,
+    val loRaChunks: Int,
+    val isSegwit: Boolean,
+)
+
 data class MeshDemoState(
     val stationRole: StationRole? = null,
     val isChoosingStation: Boolean = false,
@@ -188,6 +199,7 @@ data class MeshDemoState(
     val sent: List<SentText> = emptyList(),
     val bitcoinQueueIndex: Int = 0,
     val bitcoinQueueTotal: Int = 0,
+    val bitcoinPreview: BitcoinTransactionPreview? = null,
     val bitcoinRelayProgress: BitcoinRelayProgress = BitcoinRelayProgress.IDLE,
     val bitcoinStatusText: String = "Signed transaction ready",
     val bitcoinSession: String? = null,
@@ -212,12 +224,23 @@ data class MeshDemoState(
     val isGatewayAvailable: Boolean
         get() = gatewayRecipient?.isAvailable == true && gatewayNodeNumber != null
     val canOpenBitcoin: Boolean
-        get() = stationRole != null && isConnected && isGatewayAvailable
+        get() = stationRole != null && isConnected
     val isBitcoinRelayActive: Boolean
         get() = bitcoinRelayProgress in setOf(
             BitcoinRelayProgress.REQUESTING_GATEWAY,
             BitcoinRelayProgress.QUEUED,
             BitcoinRelayProgress.SENDING,
+            BitcoinRelayProgress.WAITING_FOR_GATEWAY,
+            BitcoinRelayProgress.BROADCAST,
+        )
+    val canCancelBitcoinRelay: Boolean
+        get() = bitcoinRelayProgress in setOf(
+            BitcoinRelayProgress.REQUESTING_GATEWAY,
+            BitcoinRelayProgress.QUEUED,
+            BitcoinRelayProgress.SENDING,
+        )
+    val canLeaveBitcoinScreen: Boolean
+        get() = !isBitcoinRelayActive || bitcoinRelayProgress in setOf(
             BitcoinRelayProgress.WAITING_FOR_GATEWAY,
             BitcoinRelayProgress.BROADCAST,
         )
@@ -352,12 +375,15 @@ internal fun conferenceRecipients(
             nodeNumber = gatewayNode?.nodeNumber,
             displayName = "Gateway",
             description = when {
-                gatewayPresence != null -> "Big screen · Gateway presence active"
-                gatewayNode != null -> "Big screen · Gateway mesh node discovered"
-                else -> "Waiting to see Gateway on the mesh"
+                gatewayPresence != null -> "Big screen · Gateway recently announced"
+                gatewayNode != null -> "Big screen · Gateway radio discovered"
+                else -> "Big screen · availability checked when you send"
             },
             kind = RecipientKind.GATEWAY,
-            isAvailable = gatewayNode != null,
+            // Presence is useful operator telemetry, but it must not block the
+            // participant experience. Chat and Bitcoin both have their own real
+            // send/response path, which is the authoritative reachability check.
+            isAvailable = true,
         ),
         MeshRecipient(
             id = "everyone",
@@ -443,6 +469,92 @@ internal fun chunkSignedTransaction(
     return rawHex.lowercase().chunked(chunkCharacters)
 }
 
+internal fun bitcoinTransactionPreview(
+    rawHex: String,
+    inputValueSats: Long = DEMO_BITCOIN_INPUT_SATS,
+): BitcoinTransactionPreview? = runCatching {
+    val normalized = rawHex.trim().lowercase()
+    chunkSignedTransaction(normalized)
+    val bytes = ByteArray(normalized.length / 2) { index ->
+        normalized.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+    }
+    val reader = BitcoinByteReader(bytes)
+    reader.skip(4) // version
+    val isSegwit = reader.remaining >= 2 && reader.peek() == 0 && reader.peek(1) != 0
+    if (isSegwit) reader.skip(2) // marker and flag
+
+    val inputCount = reader.readCompactSizeAsInt()
+    repeat(inputCount) {
+        reader.skip(32 + 4) // previous transaction hash and output index
+        reader.skip(reader.readCompactSizeAsInt()) // scriptSig
+        reader.skip(4) // sequence
+    }
+
+    val outputCount = reader.readCompactSizeAsInt()
+    var outputSats = 0L
+    repeat(outputCount) {
+        val value = reader.readLittleEndian(8)
+        require(value >= 0 && outputSats <= Long.MAX_VALUE - value)
+        outputSats += value
+        reader.skip(reader.readCompactSizeAsInt()) // scriptPubKey
+    }
+
+    if (isSegwit) {
+        repeat(inputCount) {
+            repeat(reader.readCompactSizeAsInt()) {
+                reader.skip(reader.readCompactSizeAsInt())
+            }
+        }
+    }
+    reader.skip(4) // lock time
+    require(reader.remaining == 0)
+
+    BitcoinTransactionPreview(
+        outputSats = outputSats,
+        feeSats = (inputValueSats - outputSats).takeIf { it >= 0 },
+        inputCount = inputCount,
+        outputCount = outputCount,
+        sizeBytes = bytes.size,
+        loRaChunks = chunkSignedTransaction(normalized).size,
+        isSegwit = isSegwit,
+    )
+}.getOrNull()
+
+private class BitcoinByteReader(private val bytes: ByteArray) {
+    private var position = 0
+    val remaining: Int get() = bytes.size - position
+
+    fun peek(offset: Int = 0): Int {
+        require(offset >= 0 && position + offset < bytes.size)
+        return bytes[position + offset].toInt() and 0xff
+    }
+
+    fun skip(count: Int) {
+        require(count >= 0 && count <= remaining)
+        position += count
+    }
+
+    fun readLittleEndian(byteCount: Int): Long {
+        require(byteCount in 1..8 && byteCount <= remaining)
+        var value = 0L
+        repeat(byteCount) { shift ->
+            value = value or ((bytes[position++].toLong() and 0xff) shl (shift * 8))
+        }
+        return value
+    }
+
+    fun readCompactSizeAsInt(): Int {
+        val value = when (val prefix = readLittleEndian(1).toInt()) {
+            in 0..0xfc -> prefix.toLong()
+            0xfd -> readLittleEndian(2)
+            0xfe -> readLittleEndian(4)
+            else -> readLittleEndian(8)
+        }
+        require(value in 0..Int.MAX_VALUE.toLong())
+        return value.toInt()
+    }
+}
+
 internal fun bitcoinChunkFrame(
     session: String,
     index: Int,
@@ -472,6 +584,11 @@ internal fun bitcoinResultAcknowledgementFrame(session: String): String {
 internal fun bitcoinResultRequestFrame(session: String): String {
     require(Regex("^[A-Za-z0-9_-]{1,24}$").matches(session))
     return "BTC_RESULT_REQUEST|$session"
+}
+
+internal fun bitcoinCancelFrame(session: String): String {
+    require(Regex("^[A-Za-z0-9_-]{1,24}$").matches(session))
+    return "BTC_CANCEL|$session"
 }
 
 internal fun parseBitcoinReply(text: String): BitcoinReply? {
