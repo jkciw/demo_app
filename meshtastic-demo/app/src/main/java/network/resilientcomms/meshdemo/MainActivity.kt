@@ -35,6 +35,13 @@ class MainActivity : ComponentActivity() {
                 onOpenBluetoothSettings = ::openBluetoothSettings,
             )
         }
+        handleNotificationIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
     }
 
     override fun onStart() {
@@ -59,6 +66,19 @@ class MainActivity : ComponentActivity() {
 
     private fun openBluetoothSettings() {
         startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        if (intent?.action != RadioConnectionService.ACTION_OPEN_DIRECT_MESSAGE) return
+        val senderNodeNumber = intent.getIntExtra(
+            RadioConnectionService.EXTRA_SENDER_NODE_NUMBER,
+            Int.MIN_VALUE,
+        )
+        val senderName = intent.getStringExtra(RadioConnectionService.EXTRA_SENDER_NAME).orEmpty()
+        if (senderNodeNumber != Int.MIN_VALUE && senderName.isNotBlank()) {
+            viewModel.openDirectMessage(senderNodeNumber, senderName)
+        }
+        intent.action = null
     }
 
     private fun requiredPermissions(): List<String> =

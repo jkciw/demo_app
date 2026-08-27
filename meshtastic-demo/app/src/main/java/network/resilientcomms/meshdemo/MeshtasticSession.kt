@@ -18,7 +18,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -72,10 +74,13 @@ class MeshtasticSession(
         ),
     )
     val state: StateFlow<MeshDemoState> = _state.asStateFlow()
+    private val _incomingDirectMessages = MutableSharedFlow<ReceivedText>(extraBufferCapacity = 16)
+    val incomingDirectMessages: SharedFlow<ReceivedText> = _incomingDirectMessages.asSharedFlow()
 
     private val connectionMutex = Mutex()
     private val observerJobs = mutableListOf<Job>()
     private val knownNodes = mutableMapOf<Int, KnownMeshNode>()
+    private val receivedTextPacketKeys = LinkedHashSet<String>()
     private var ownNodeNumber: Int? = null
     private val presenceSession = System.currentTimeMillis().toString(36).takeLast(12)
     private var presenceJob: Job? = null
@@ -138,6 +143,7 @@ class MeshtasticSession(
                     presences = presences,
                 ),
                 selectedRecipient = null,
+                unreadDirectByNode = emptyMap(),
                 bitcoinQueueIndex = queueIndex,
                 bitcoinQueueTotal = transactions.size,
                 bitcoinPreview = transactions.getOrNull(queueIndex)?.let(::bitcoinTransactionPreview),
@@ -556,6 +562,41 @@ class MeshtasticSession(
                 sendProgress = SendProgress.IDLE,
                 sendStatusText = "",
                 lastPacketId = null,
+                unreadDirectByNode = recipient.nodeNumber?.let(it.unreadDirectByNode::minus)
+                    ?: it.unreadDirectByNode,
+            )
+        }
+    }
+
+    fun openDirectMessage(senderNodeNumber: Int, senderName: String) {
+        val current = _state.value
+        if (current.isBitcoinRelayActive) return
+        val recipient = current.recipients.firstOrNull {
+            it.kind == RecipientKind.PERSON && it.nodeNumber == senderNodeNumber
+        } ?: current.recipients.firstOrNull {
+            it.kind == RecipientKind.PERSON && it.displayName.equals(senderName, ignoreCase = true)
+        }
+        if (recipient == null) {
+            _state.update { it.copy(step = DemoStep.CONTACTS, selectedRecipient = null) }
+            return
+        }
+        val resolvedRecipient = recipient.copy(
+            nodeNumber = senderNodeNumber,
+            description = "Direct message received",
+            isAvailable = true,
+        )
+        _state.update {
+            it.copy(
+                step = DemoStep.COMPOSE,
+                recipients = it.recipients.map { candidate ->
+                    if (candidate.id == resolvedRecipient.id) resolvedRecipient else candidate
+                },
+                selectedRecipient = resolvedRecipient,
+                draft = "",
+                sendProgress = SendProgress.IDLE,
+                sendStatusText = "",
+                lastPacketId = null,
+                unreadDirectByNode = it.unreadDirectByNode - senderNodeNumber,
             )
         }
     }
@@ -1196,25 +1237,56 @@ class MeshtasticSession(
                     ?: participantName(packet.from, advertisedName)
                 val packetId = packet.id.toUInt().toString()
                 val isBroadcast = packet.to == NodeId.BROADCAST.raw
+                val packetKey = "${packet.from}:$packetId"
+                if (!rememberReceivedTextPacket(packetKey)) {
+                    Log.d(TAG, "Ignoring duplicate text packet=$packetId sender=$sender")
+                    return@onEach
+                }
+                val receivedMessage = ReceivedText(
+                    packetId = packetId,
+                    senderNodeNumber = packet.from,
+                    sender = sender,
+                    text = text,
+                    isBroadcast = isBroadcast,
+                    recordedAtMs = System.currentTimeMillis(),
+                )
                 Log.i(TAG, "Received text packet=$packetId sender=$sender bytes=${text.encodeToByteArray().size}")
                 _state.update {
+                    val isUnreadDirect = shouldNotifyDirectMessage(receivedMessage, ownNodeNumber) &&
+                        !(
+                            it.step == DemoStep.COMPOSE &&
+                                it.selectedRecipient?.kind == RecipientKind.PERSON &&
+                                it.selectedRecipient.nodeNumber == receivedMessage.senderNodeNumber
+                            )
+                    val unread = if (isUnreadDirect) {
+                        it.unreadDirectByNode + (
+                            receivedMessage.senderNodeNumber to
+                                (it.unreadDirectByNode[receivedMessage.senderNodeNumber] ?: 0) + 1
+                            )
+                    } else {
+                        it.unreadDirectByNode
+                    }
                     it.copy(
                         received = (
-                            listOf(
-                                ReceivedText(
-                                    packetId = packetId,
-                                    senderNodeNumber = packet.from,
-                                    sender = sender,
-                                    text = text,
-                                    isBroadcast = isBroadcast,
-                                    recordedAtMs = System.currentTimeMillis(),
-                                ),
-                            ) + it.received
+                            listOf(receivedMessage) + it.received
                             ).take(MAX_MESSAGES),
+                        unreadDirectByNode = unread,
                     )
+                }
+                if (shouldNotifyDirectMessage(receivedMessage, ownNodeNumber)) {
+                    _incomingDirectMessages.tryEmit(receivedMessage)
                 }
             }
             .launchIn(scope)
+    }
+
+    private fun rememberReceivedTextPacket(packetKey: String): Boolean {
+        if (!receivedTextPacketKeys.add(packetKey)) return false
+        while (receivedTextPacketKeys.size > MAX_REMEMBERED_TEXT_PACKETS) {
+            val oldest = receivedTextPacketKeys.firstOrNull() ?: break
+            receivedTextPacketKeys.remove(oldest)
+        }
+        return true
     }
 
     private fun scheduleRecovery(address: String, name: String?) {
@@ -1565,6 +1637,7 @@ class MeshtasticSession(
     private companion object {
         const val TAG = "MeshtasticDemo"
         const val MAX_MESSAGES = 20
+        const val MAX_REMEMBERED_TEXT_PACKETS = 256
         const val PREFERENCES_NAME = "bitcoin_regtest_queue"
         const val SELECTED_RADIO_ADDRESS_KEY = "selected_radio_address"
         const val SELECTED_RADIO_NAME_KEY = "selected_radio_name"

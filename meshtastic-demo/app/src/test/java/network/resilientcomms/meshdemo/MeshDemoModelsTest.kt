@@ -10,6 +10,22 @@ import org.junit.Test
 
 class MeshDemoModelsTest {
     @Test
+    fun onlyIncomingDirectMessagesTriggerParticipantNotifications() {
+        val direct = ReceivedText("101", 42, "Bob", "Hello Alice", false, 1_000L)
+
+        assertTrue(shouldNotifyDirectMessage(direct, ownNodeNumber = 7))
+        assertFalse(shouldNotifyDirectMessage(direct.copy(isBroadcast = true), ownNodeNumber = 7))
+        assertFalse(shouldNotifyDirectMessage(direct, ownNodeNumber = 42))
+    }
+
+    @Test
+    fun unreadDirectTotal_sumsOnlyPerNodeDirectMessageCounters() {
+        val state = MeshDemoState(unreadDirectByNode = mapOf(42 to 2, 84 to 1))
+
+        assertEquals(3, state.unreadDirectTotal)
+    }
+
+    @Test
     fun truncateUtf8_preservesByteLimitWithoutSplittingCharacters() {
         val value = "a".repeat(231) + "₹" + "z"
 

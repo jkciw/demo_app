@@ -1,4 +1,4 @@
-# Meshtastic Conference Demo v0.4.0-beta.3
+# Meshtastic Conference Demo v0.4.0-beta.6
 
 This is the four-station software preview built from `four-station-mesh`. The same universal APK is
 used on every participant phone; choose **Alice**, **Bob**, **Charlie**, or **Dana** inside the app.
@@ -7,6 +7,16 @@ acceptance gate passes.
 
 ## What changed
 
+- **Incoming DMs are noticeable:** a real participant-to-participant direct message now produces a
+  high-priority Android notification with the sender and message preview. Tapping it opens that
+  participant conversation when the contact is available. Broadcasts, presence announcements,
+  Gateway envelopes, Bitcoin frames, duplicate packets, and the phone's own echoes stay silent.
+- **Unread DMs are visible inside the app:** the **Choose how to use the mesh** screen shows the
+  total unread direct-message count and a per-contact **NEW** badge. Opening that conversation
+  clears its badge; messages already visible in the open conversation are not counted as unread.
+- **The landing action carries the signal:** **Send a mesh message** also shows the total unread
+  count, while the redundant **Recently received** feed beneath Broadcast has been removed. Message
+  history remains inside the relevant conversation and the Everyone broadcast screen.
 - **Gateway messages no longer depend on PKI contact caches:** participant apps wrap Gateway
   requests in a reserved application-addressed frame and carry it over the proven shared primary
   channel. The Gateway console displays only the human message, while the other participant apps

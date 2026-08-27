@@ -63,6 +63,9 @@ progress screen and reports success or failure before returning to the Operator 
 
 After permission is granted, a foreground connected-device service owns the app's single
 Meshtastic client. The persistent **radio link** notification confirms that the service is alive.
+Incoming participant DMs use a separate high-priority **Direct messages** notification channel;
+the sender and message preview are shown, and tapping the alert opens the conversation. Public
+broadcasts and application protocol frames do not alert.
 Leaving the screen, locking the phone, or Android recreating the activity no longer closes BLE;
 the operator must explicitly select a different paired radio before the existing link is closed. If
 the SDK declares an otherwise healthy idle BLE session stale, the service rebuilds the client with

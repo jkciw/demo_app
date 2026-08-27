@@ -34,6 +34,8 @@ class MeshDemoViewModel(application: Application) : AndroidViewModel(application
     fun updateDraft(value: String) = withSession { updateDraft(value) }
     fun start() = withSession { start() }
     fun selectRecipient(id: String) = withSession { selectRecipient(id) }
+    fun openDirectMessage(senderNodeNumber: Int, senderName: String) =
+        withSession { openDirectMessage(senderNodeNumber, senderName) }
     fun returnToContacts() = withSession { returnToContacts() }
     fun openOperator() = withSession { openOperator() }
     fun returnToOperator() = withSession { returnToOperator() }

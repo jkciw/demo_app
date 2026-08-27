@@ -165,6 +165,9 @@ data class ReceivedText(
     val recordedAtMs: Long,
 )
 
+internal fun shouldNotifyDirectMessage(message: ReceivedText, ownNodeNumber: Int?): Boolean =
+    !message.isBroadcast && message.senderNodeNumber != ownNodeNumber
+
 data class SentText(
     val packetId: String,
     val recipientNodeNumber: Int?,
@@ -203,6 +206,7 @@ data class MeshDemoState(
     val sendStatusText: String = "",
     val lastPacketId: String? = null,
     val received: List<ReceivedText> = emptyList(),
+    val unreadDirectByNode: Map<Int, Int> = emptyMap(),
     val sent: List<SentText> = emptyList(),
     val bitcoinQueueIndex: Int = 0,
     val bitcoinQueueTotal: Int = 0,
@@ -231,6 +235,7 @@ data class MeshDemoState(
             draft.isNotBlank() && draftBytes <= draftByteLimit &&
             sendProgress !in setOf(SendProgress.QUEUED, SendProgress.SENT_TO_RADIO)
     val bitcoinRemaining: Int get() = (bitcoinQueueTotal - bitcoinQueueIndex).coerceAtLeast(0)
+    val unreadDirectTotal: Int get() = unreadDirectByNode.values.sum()
     val gatewayRecipient: MeshRecipient?
         get() = recipients.firstOrNull { it.kind == RecipientKind.GATEWAY }
     val gatewayNodeNumber: Int? get() = gatewayRecipient?.nodeNumber

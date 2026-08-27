@@ -405,12 +405,20 @@ private fun ExperienceSheet(state: MeshDemoState, onMessage: () -> Unit, onBitco
             Text("CHOOSE AN EXPERIENCE", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Black)
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ExperienceTile("↗", "Send a mesh\nmessage", Cyan, enabled = true, onClick = onMessage)
+                ExperienceTile(
+                    symbol = "↗",
+                    title = "Send a mesh\nmessage",
+                    accent = Cyan,
+                    enabled = true,
+                    unreadCount = state.unreadDirectTotal,
+                    onClick = onMessage,
+                )
                 ExperienceTile(
                     symbol = "₿",
                     title = "Relay\nBitcoin",
                     accent = BitcoinOrange,
                     enabled = state.canOpenBitcoin,
+                    unreadCount = 0,
                     onClick = onBitcoin,
                 )
             }
@@ -431,6 +439,7 @@ private fun ExperienceTile(
     title: String,
     accent: Color,
     enabled: Boolean,
+    unreadCount: Int,
     onClick: () -> Unit,
 ) {
     Button(
@@ -446,7 +455,27 @@ private fun ExperienceTile(
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.Start,
         ) {
-            Text(symbol, fontSize = 24.sp, fontWeight = FontWeight.Black)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(symbol, fontSize = 24.sp, fontWeight = FontWeight.Black)
+                if (unreadCount > 0) {
+                    Box(
+                        modifier = Modifier
+                            .background(Danger, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                    ) {
+                        Text(
+                            unreadCount.toString(),
+                            color = Navy,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black,
+                        )
+                    }
+                }
+            }
             Text(title, fontSize = 15.sp, lineHeight = 18.sp, fontWeight = FontWeight.Black)
         }
     }
@@ -1236,6 +1265,10 @@ private fun ContactsScreen(
         color = Muted,
         lineHeight = 22.sp,
     )
+    if (state.unreadDirectTotal > 0) {
+        Spacer(Modifier.height(14.dp))
+        UnreadMessagesBanner(state.unreadDirectTotal)
+    }
     Spacer(Modifier.height(22.dp))
 
     val people = state.recipients.filter { it.kind == RecipientKind.PERSON }
@@ -1243,7 +1276,11 @@ private fun ContactsScreen(
         ExperienceLabel("PERSON TO PERSON", "A familiar conversation")
         Spacer(Modifier.height(9.dp))
         people.forEachIndexed { index, recipient ->
-            RecipientCard(recipient, onSelectRecipient)
+            RecipientCard(
+                recipient = recipient,
+                unreadCount = recipient.nodeNumber?.let(state.unreadDirectByNode::get) ?: 0,
+                onSelectRecipient = onSelectRecipient,
+            )
             if (index < people.lastIndex) Spacer(Modifier.height(9.dp))
         }
         Spacer(Modifier.height(20.dp))
@@ -1252,48 +1289,38 @@ private fun ContactsScreen(
     state.recipients.firstOrNull { it.kind == RecipientKind.GATEWAY }?.let { recipient ->
         ExperienceLabel("GATEWAY SERVICES", "Reach the mesh edge and Bitcoin Core")
         Spacer(Modifier.height(9.dp))
-        RecipientCard(recipient, onSelectRecipient)
+        RecipientCard(recipient, unreadCount = 0, onSelectRecipient = onSelectRecipient)
         Spacer(Modifier.height(20.dp))
     }
 
     state.recipients.firstOrNull { it.kind == RecipientKind.EVERYONE }?.let { recipient ->
         ExperienceLabel("MESH ANNOUNCEMENT", "One message for every listening node")
         Spacer(Modifier.height(9.dp))
-        RecipientCard(recipient, onSelectRecipient)
+        RecipientCard(recipient, unreadCount = 0, onSelectRecipient = onSelectRecipient)
     }
-    if (state.received.isNotEmpty()) {
-        Spacer(Modifier.height(26.dp))
-        Text("RECENTLY RECEIVED", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(10.dp))
-        state.received.take(3).forEach { message ->
-            val matchingRecipient = if (message.isBroadcast) {
-                state.recipients.firstOrNull { it.kind == RecipientKind.EVERYONE }
-            } else {
-                state.recipients.firstOrNull { it.nodeNumber == message.senderNodeNumber }
-            }
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Panel),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 9.dp),
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        if (message.isBroadcast) "${message.sender} · broadcast" else message.sender,
-                        color = Cyan,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(message.text, color = Color.White, fontSize = 16.sp)
-                    if (matchingRecipient?.isAvailable == true) {
-                        Spacer(Modifier.height(7.dp))
-                        TextButton(
-                            onClick = { onSelectRecipient(matchingRecipient.id) },
-                            contentPadding = PaddingValues(0.dp),
-                        ) {
-                            Text("REPLY  →", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-                        }
-                    }
-                }
-            }
+}
+
+@Composable
+private fun UnreadMessagesBanner(unreadCount: Int) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Cyan.copy(alpha = 0.12f)),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Cyan.copy(alpha = 0.55f), RoundedCornerShape(16.dp)),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(9.dp).background(Cyan, CircleShape))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "$unreadCount UNREAD DIRECT ${if (unreadCount == 1) "MESSAGE" else "MESSAGES"}",
+                color = Cyan,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
+            )
         }
     }
 }
@@ -1311,7 +1338,11 @@ private fun ExperienceLabel(title: String, description: String) {
 }
 
 @Composable
-private fun RecipientCard(recipient: MeshRecipient, onSelectRecipient: (String) -> Unit) {
+private fun RecipientCard(
+    recipient: MeshRecipient,
+    unreadCount: Int,
+    onSelectRecipient: (String) -> Unit,
+) {
     val accent = when (recipient.kind) {
         RecipientKind.PERSON -> Cyan
         RecipientKind.GATEWAY -> BitcoinOrange
@@ -1364,7 +1395,24 @@ private fun RecipientCard(recipient: MeshRecipient, onSelectRecipient: (String) 
                         Text(recipient.description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
                     }
                 }
-                Text(if (recipient.isAvailable) "›" else "…", color = accent, fontSize = 24.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (unreadCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .background(Danger, RoundedCornerShape(12.dp))
+                                .padding(horizontal = 9.dp, vertical = 5.dp),
+                        ) {
+                            Text(
+                                "$unreadCount NEW",
+                                color = Navy,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black,
+                            )
+                        }
+                        Spacer(Modifier.width(9.dp))
+                    }
+                    Text(if (recipient.isAvailable) "›" else "…", color = accent, fontSize = 24.sp)
+                }
             }
         }
     }
