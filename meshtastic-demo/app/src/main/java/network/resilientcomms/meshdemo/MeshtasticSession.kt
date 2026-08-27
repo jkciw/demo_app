@@ -714,7 +714,18 @@ class MeshtasticSession(
         val text = sendState.draft.trim()
         val recipient = sendState.selectedRecipient ?: return
         if (!sendState.canSend || text.isEmpty()) return
-        val destination = recipient.nodeNumber?.let(::NodeId) ?: NodeId.BROADCAST
+        val transportText = if (recipient.kind == RecipientKind.GATEWAY) {
+            val identity = sendState.stationRole?.conferenceIdentity ?: return
+            gatewayRequestFrame(identity, text)
+        } else {
+            text
+        }
+        val destination = when (recipient.kind) {
+            RecipientKind.PERSON -> recipient.nodeNumber?.let(::NodeId) ?: return
+            RecipientKind.GATEWAY,
+            RecipientKind.EVERYONE,
+            -> NodeId.BROADCAST
+        }
 
         _state.update {
             it.copy(
@@ -727,7 +738,7 @@ class MeshtasticSession(
         scope.launch {
             try {
                 val handle = radioClient.sendText(
-                    text = text,
+                    text = transportText,
                     to = destination,
                     channel = ChannelIndex(0),
                 )
@@ -735,7 +746,7 @@ class MeshtasticSession(
                 Log.i(
                     TAG,
                     "Queued message packet=$packetId recipient=${recipient.displayName} destination=$destination " +
-                        "bytes=${text.encodeToByteArray().size}",
+                        "bytes=${transportText.encodeToByteArray().size} mode=${recipient.kind}",
                 )
                 _state.update {
                     it.copy(
@@ -748,6 +759,7 @@ class MeshtasticSession(
                                     packetId = packetId,
                                     recipientNodeNumber = recipient.nodeNumber,
                                     recipient = recipient.displayName,
+                                    recipientKind = recipient.kind,
                                     text = text,
                                     isBroadcast = recipient.isBroadcast,
                                     recordedAtMs = System.currentTimeMillis(),
@@ -1159,6 +1171,12 @@ class MeshtasticSession(
                         return@onEach
                     }
                     null -> Unit
+                }
+                if (text.startsWith("$GATEWAY_REQUEST_PREFIX|")) {
+                    // Gateway service requests use the primary channel for transport,
+                    // but are not public chat messages. Only the serial Gateway
+                    // collector displays the human-readable payload.
+                    return@onEach
                 }
                 if (text.startsWith("BTC_")) {
                     // The relay session ID is the correlation key. Requiring a
@@ -1669,20 +1687,20 @@ private fun SendState.toProgress(): SendProgress =
 private fun SendState.toParticipantText(recipient: MeshRecipient): String =
     when (this) {
         SendState.Queued -> "Queued for the radio"
-        SendState.Sent -> if (recipient.isBroadcast) {
-            "Broadcast transmitted over LoRa"
-        } else {
-            "Travelling across the mesh to ${recipient.displayName}"
+        SendState.Sent -> when (recipient.kind) {
+            RecipientKind.GATEWAY -> "Gateway request transmitted over LoRa"
+            RecipientKind.EVERYONE -> "Broadcast transmitted over LoRa"
+            RecipientKind.PERSON -> "Travelling across the mesh to ${recipient.displayName}"
         }
-        SendState.Acked -> if (recipient.isBroadcast) {
-            "Broadcast accepted by the radio"
-        } else {
-            "${recipient.displayName} acknowledged the packet"
+        SendState.Acked -> when (recipient.kind) {
+            RecipientKind.GATEWAY -> "Gateway request accepted by the radio"
+            RecipientKind.EVERYONE -> "Broadcast accepted by the radio"
+            RecipientKind.PERSON -> "${recipient.displayName} acknowledged the packet"
         }
-        SendState.Delivered -> if (recipient.isBroadcast) {
-            "Relayed by the mesh"
-        } else {
-            "Delivered to ${recipient.displayName}"
+        SendState.Delivered -> when (recipient.kind) {
+            RecipientKind.GATEWAY -> "Gateway request relayed across the mesh"
+            RecipientKind.EVERYONE -> "Relayed by the mesh"
+            RecipientKind.PERSON -> "Delivered to ${recipient.displayName}"
         }
         is SendState.Failed -> "Send failed: $reason"
     }

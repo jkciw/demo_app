@@ -10,6 +10,7 @@ internal const val LAPTOP_NODE_NUMBER = 0x2303A141
 internal const val PRESENCE_TTL_MS = 10 * 60 * 1000L
 internal const val PRESENCE_PREFIX = "DEMO_PRESENCE"
 internal const val PRESENCE_REQUEST = "DEMO_PRESENCE_REQUEST|1"
+internal const val GATEWAY_REQUEST_PREFIX = "DEMO_GATEWAY|1"
 
 enum class DemoStep {
     HOME,
@@ -37,6 +38,11 @@ sealed interface PresenceFrame {
 
     data object Request : PresenceFrame
 }
+
+data class GatewayRequest(
+    val identity: ConferenceIdentity,
+    val text: String,
+)
 
 data class StationPresence(
     val identity: ConferenceIdentity,
@@ -163,6 +169,7 @@ data class SentText(
     val packetId: String,
     val recipientNodeNumber: Int?,
     val recipient: String,
+    val recipientKind: RecipientKind,
     val text: String,
     val isBroadcast: Boolean,
     val recordedAtMs: Long,
@@ -213,9 +220,15 @@ data class MeshDemoState(
     val radioDisplayName: String
         get() = selectedRadioName ?: stationRole?.radioFallbackName ?: "Attached radio"
     val draftBytes: Int get() = draft.encodeToByteArray().size
+    val draftByteLimit: Int
+        get() = if (selectedRecipient?.kind == RecipientKind.GATEWAY) {
+            MAX_TEXT_BYTES - gatewayRequestOverhead(stationRole?.conferenceIdentity)
+        } else {
+            MAX_TEXT_BYTES
+        }
     val canSend: Boolean
         get() = stationRole != null && isConnected && selectedRecipient?.isAvailable == true &&
-            draft.isNotBlank() && draftBytes <= MAX_TEXT_BYTES &&
+            draft.isNotBlank() && draftBytes <= draftByteLimit &&
             sendProgress !in setOf(SendProgress.QUEUED, SendProgress.SENT_TO_RADIO)
     val bitcoinRemaining: Int get() = (bitcoinQueueTotal - bitcoinQueueIndex).coerceAtLeast(0)
     val gatewayRecipient: MeshRecipient?
@@ -273,6 +286,31 @@ internal fun parsePresenceFrame(text: String): PresenceFrame? {
     val session = parts[3].takeIf { Regex("^[A-Za-z0-9_-]{1,24}$").matches(it) } ?: return null
     return PresenceFrame.Announcement(identity, session)
 }
+
+internal fun gatewayRequestFrame(identity: ConferenceIdentity, text: String): String {
+    require(identity != ConferenceIdentity.GATEWAY)
+    val body = text.trim()
+    require(body.isNotEmpty())
+    return "$GATEWAY_REQUEST_PREFIX|${identity.name}|$body".also {
+        require(it.encodeToByteArray().size <= MAX_TEXT_BYTES)
+    }
+}
+
+internal fun parseGatewayRequest(text: String): GatewayRequest? {
+    val parts = text.trim().split('|', limit = 4)
+    if (parts.size != 4 || "${parts[0]}|${parts[1]}" != GATEWAY_REQUEST_PREFIX) return null
+    val identity = runCatching { ConferenceIdentity.valueOf(parts[2]) }.getOrNull()
+        ?.takeUnless { it == ConferenceIdentity.GATEWAY }
+        ?: return null
+    val body = parts[3].trim().takeIf(String::isNotEmpty) ?: return null
+    if (text.encodeToByteArray().size > MAX_TEXT_BYTES) return null
+    return GatewayRequest(identity, body)
+}
+
+private fun gatewayRequestOverhead(identity: ConferenceIdentity?): Int =
+    "$GATEWAY_REQUEST_PREFIX|${identity?.name ?: ConferenceIdentity.CHARLIE.name}|"
+        .encodeToByteArray()
+        .size
 
 internal fun activePresences(
     presences: Collection<StationPresence>,

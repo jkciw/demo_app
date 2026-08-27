@@ -1,4 +1,4 @@
-# Meshtastic Conference Demo v0.4.0-beta.1
+# Meshtastic Conference Demo v0.4.0-beta.3
 
 This is the four-station software preview built from `four-station-mesh`. The same universal APK is
 used on every participant phone; choose **Alice**, **Bob**, **Charlie**, or **Dana** inside the app.
@@ -7,6 +7,14 @@ acceptance gate passes.
 
 ## What changed
 
+- **Gateway messages no longer depend on PKI contact caches:** participant apps wrap Gateway
+  requests in a reserved application-addressed frame and carry it over the proven shared primary
+  channel. The Gateway console displays only the human message, while the other participant apps
+  hide the protocol frame. Alice–Bob–Charlie–Dana conversations remain Meshtastic direct messages,
+  and Everyone remains the explicit public broadcast experience.
+- **Gateway requests identify their station in-band:** the request carries Alice, Bob, Charlie, or
+  Dana inside the application envelope, so the big screen labels the visitor correctly even after
+  radios are reset or exchanged and presence is still refreshing.
 - **Bitcoin confirmation is visibly active:** once all chunks reach the Gateway node, an animated
   hourglass appears while the phone polls the Gateway for the confirmed transaction result. It
   disappears automatically on confirmation or failure.

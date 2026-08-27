@@ -1381,7 +1381,12 @@ private data class ConversationLine(
 private fun conversationLines(state: MeshDemoState, recipient: MeshRecipient): List<ConversationLine> {
     val outgoing = state.sent
         .filter {
-            if (recipient.isBroadcast) it.isBroadcast else !it.isBroadcast && it.recipientNodeNumber == recipient.nodeNumber
+            when (recipient.kind) {
+                RecipientKind.GATEWAY -> it.recipientKind == RecipientKind.GATEWAY
+                RecipientKind.EVERYONE -> it.isBroadcast
+                RecipientKind.PERSON ->
+                    it.recipientKind == RecipientKind.PERSON && it.recipientNodeNumber == recipient.nodeNumber
+            }
         }
         .map {
             ConversationLine(
@@ -1494,7 +1499,7 @@ private fun ConversationScreen(
                 value = state.draft,
                 onValueChange = onDraftChanged,
                 placeholder = { Text("Message ${recipient.displayName}") },
-                supportingText = { Text("${state.draftBytes} / $MAX_TEXT_BYTES bytes") },
+                supportingText = { Text("${state.draftBytes} / ${state.draftByteLimit} bytes") },
                 minLines = 1,
                 maxLines = 4,
                 enabled = recipient.isAvailable,
@@ -1546,7 +1551,7 @@ private fun GatewayServicesScreen(
         ExperienceHeader(
             symbol = "▣",
             title = "Gateway Services",
-            subtitle = "Availability checked when you send",
+            subtitle = "Application-addressed over the shared channel",
             accent = BitcoinOrange,
         )
         Spacer(Modifier.height(12.dp))
@@ -1565,7 +1570,7 @@ private fun GatewayServicesScreen(
                 Text("BIG SCREEN MESSAGE", color = BitcoinOrange, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Send a message to the Gateway node. It appears on the shared conference display because the Gateway is a service endpoint, not another person.",
+                    "This request travels on the shared mesh channel, but its application envelope addresses it only to the Gateway service. Other conference apps hide it; the Gateway shows the message on the big screen.",
                     color = Color.White,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
@@ -1800,7 +1805,7 @@ private fun MessageComposer(
             value = state.draft,
             onValueChange = onDraftChanged,
             placeholder = { Text(placeholder) },
-            supportingText = { Text("${state.draftBytes} / $MAX_TEXT_BYTES bytes") },
+            supportingText = { Text("${state.draftBytes} / ${state.draftByteLimit} bytes") },
             minLines = 1,
             maxLines = 4,
             enabled = state.selectedRecipient?.isAvailable == true,
@@ -1884,7 +1889,7 @@ private fun MessageRouteCard(state: MeshDemoState, recipient: MeshRecipient) {
             Text(
                 when (recipient.kind) {
                     RecipientKind.PERSON -> "LoRa addressed packet  →  ${recipient.displayName}"
-                    RecipientKind.GATEWAY -> "LoRa addressed packet  →  Gateway node  →  Shared display"
+                    RecipientKind.GATEWAY -> "LoRa primary channel  →  Gateway service envelope  →  Shared display"
                     RecipientKind.EVERYONE -> "LoRa primary channel  →  Every listening node"
                 },
                 color = when (recipient.kind) {

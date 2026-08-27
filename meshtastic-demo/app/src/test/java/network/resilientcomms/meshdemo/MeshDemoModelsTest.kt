@@ -99,6 +99,28 @@ class MeshDemoModelsTest {
     }
 
     @Test
+    fun gatewayRequests_areApplicationAddressedBroadcastFramesWithSafeByteLimits() {
+        val frame = gatewayRequestFrame(ConferenceIdentity.ALICE, "Show this | on the big screen")
+
+        assertEquals(
+            GatewayRequest(ConferenceIdentity.ALICE, "Show this | on the big screen"),
+            parseGatewayRequest(frame),
+        )
+        assertEquals(null, parseGatewayRequest("DEMO_GATEWAY|2|ALICE|wrong version"))
+        assertEquals(null, parseGatewayRequest("DEMO_GATEWAY|1|GATEWAY|wrong sender"))
+        assertTrue(frame.encodeToByteArray().size <= MAX_TEXT_BYTES)
+
+        val gateway = MeshRecipient("gateway", null, "Gateway", "Service", RecipientKind.GATEWAY, true)
+        val ready = MeshDemoState(
+            stationRole = StationRole.ALPHA,
+            radioStatus = RadioStatus.CONNECTED,
+            selectedRecipient = gateway,
+        )
+        assertTrue(ready.copy(draft = "a".repeat(ready.draftByteLimit)).canSend)
+        assertFalse(ready.copy(draft = "a".repeat(ready.draftByteLimit + 1)).canSend)
+    }
+
+    @Test
     fun signedTransaction_isSplitIntoMeshtasticSafeFrames() {
         val rawHex = "ab".repeat(191)
 

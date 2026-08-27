@@ -6,6 +6,8 @@ from monitor import (
     MeshtasticAdapter,
     MessageHub,
     UnavailableBitcoinRpc,
+    gateway_request,
+    parse_gateway_request,
     parse_presence_announcement,
     presence_announcement,
     radio_configuration,
@@ -13,6 +15,16 @@ from monitor import (
 
 
 class MessageHubTest(unittest.TestCase):
+    def test_gateway_request_frames_are_strict_and_preserve_message_delimiters(self):
+        frame = gateway_request("ALICE", "Show this | on the big screen")
+
+        self.assertEqual(
+            ("ALICE", "Show this | on the big screen"),
+            parse_gateway_request(frame),
+        )
+        self.assertIsNone(parse_gateway_request("DEMO_GATEWAY|2|ALICE|wrong version"))
+        self.assertIsNone(parse_gateway_request("DEMO_GATEWAY|1|GATEWAY|wrong sender"))
+
     def test_presence_frames_are_strict_and_round_trip(self):
         frame = presence_announcement("GATEWAY", "session_123")
         self.assertEqual(("GATEWAY", "session_123"), parse_presence_announcement(frame))
@@ -70,6 +82,42 @@ class MessageHubTest(unittest.TestCase):
                 }
             )
             self.assertEqual("!radio-one", hub.snapshot()["messages"][-1]["sender"])
+        finally:
+            adapter.transaction_bridge.close()
+
+    def test_gateway_request_displays_only_human_text_and_carries_station_identity(self):
+        hub = MessageHub()
+        adapter = MeshtasticAdapter(
+            hub,
+            "/dev/test",
+            threading.Event(),
+            UnavailableBitcoinRpc("test"),
+        )
+        try:
+            adapter._on_text(
+                {
+                    "id": 7,
+                    "fromId": "!alice-radio",
+                    "decoded": {"text": gateway_request("ALICE", "Hello Gateway")},
+                    "channel": 0,
+                    "rxRssi": -42,
+                }
+            )
+
+            message = hub.snapshot()["messages"][0]
+            self.assertEqual("Alice", message["sender"])
+            self.assertEqual("Hello Gateway", message["text"])
+            self.assertEqual("Gateway request", message["title"])
+            self.assertNotIn("DEMO_GATEWAY", message["text"])
+
+            adapter._on_text(
+                {
+                    "id": 8,
+                    "fromId": "!alice-radio",
+                    "decoded": {"text": "DEMO_GATEWAY|1|UNKNOWN|hidden control frame"},
+                }
+            )
+            self.assertEqual(1, len(hub.snapshot()["messages"]))
         finally:
             adapter.transaction_bridge.close()
 

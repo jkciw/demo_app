@@ -32,6 +32,8 @@ NODE_NAMES = {
 BITCOIN_REPLY_INTERVAL_SECONDS = 1.0
 PRESENCE_PREFIX = "DEMO_PRESENCE"
 PRESENCE_REQUEST = "DEMO_PRESENCE_REQUEST|1"
+GATEWAY_REQUEST_PREFIX = "DEMO_GATEWAY|1"
+PARTICIPANT_IDENTITIES = {"ALICE", "BOB", "CHARLIE", "DANA"}
 PRESENCE_INTERVAL_SECONDS = 5 * 60.0
 PRESENCE_INITIAL_DELAYS_SECONDS = (1.0,)
 PRESENCE_REQUEST_RESPONSE_DELAY_SECONDS = 3.0
@@ -57,6 +59,31 @@ def parse_presence_announcement(text: str) -> tuple[str, str] | None:
     except ValueError:
         return None
     return identity, session
+
+
+def gateway_request(identity: str, text: str) -> str:
+    identity = identity.strip().upper()
+    body = text.strip()
+    if identity not in PARTICIPANT_IDENTITIES:
+        raise ValueError("Unknown participant identity")
+    if not body:
+        raise ValueError("Gateway request cannot be empty")
+    frame = f"{GATEWAY_REQUEST_PREFIX}|{identity}|{body}"
+    if len(frame.encode("utf-8")) > 233:
+        raise ValueError("Gateway request exceeds Meshtastic text limit")
+    return frame
+
+
+def parse_gateway_request(text: str) -> tuple[str, str] | None:
+    parts = text.strip().split("|", 3)
+    if len(parts) != 4 or "|".join(parts[:2]) != GATEWAY_REQUEST_PREFIX:
+        return None
+    identity, body = parts[2].strip().upper(), parts[3].strip()
+    try:
+        gateway_request(identity, body)
+    except ValueError:
+        return None
+    return identity, body
 
 
 def radio_configuration(interface: Any) -> dict[str, str]:
@@ -324,9 +351,22 @@ class MeshtasticAdapter(threading.Thread):
                 self._presence_wakeup.set()
             return
 
-        sender = self._presence_names.get(source) or NODE_NAMES.get(source, source)
+        request = parse_gateway_request(text)
+        is_gateway_request = request is not None
+        if request is not None:
+            identity, text = request
+            self._record_presence(source, identity)
+            sender = identity.title()
+            title = "Gateway request"
+        elif text.startswith(f"{GATEWAY_REQUEST_PREFIX}|"):
+            # Reserved protocol traffic must never leak into the public message list.
+            return
+        else:
+            sender = self._presence_names.get(source) or NODE_NAMES.get(source, source)
+            title = None
+
         channel = packet.get("channel", 0)
-        if self.transaction_bridge.handle_text(
+        if not is_gateway_request and self.transaction_bridge.handle_text(
             text, source, sender, channel if isinstance(channel, int) else 0
         ):
             return
@@ -340,6 +380,7 @@ class MeshtasticAdapter(threading.Thread):
                 "sender": sender,
                 "sourceId": source,
                 "text": text,
+                "title": title,
                 "rssi": packet.get("rxRssi"),
                 "snr": packet.get("rxSnr"),
                 "hops": hops,

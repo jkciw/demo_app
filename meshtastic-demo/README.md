@@ -2,8 +2,10 @@
 
 This standalone Android app is the Meshtastic half of the resilient communications demo. It uses
 the official Meshtastic SDK `0.1.0` over BLE and presents the other conference participants plus
-the **Gateway** as visitor-facing destinations. Alice, Bob, Charlie, and Dana receive node-addressed messages;
-**Everyone** remains an explicit public broadcast on primary channel `0`. Real inbound packets are
+the **Gateway** as visitor-facing destinations. Alice, Bob, Charlie, and Dana receive node-addressed messages.
+Gateway requests use a reserved application envelope over primary channel `0`, avoiding PKI contact-cache
+failures while remaining hidden from the other conference apps. **Everyone** remains an explicit public
+broadcast on primary channel `0`. Real inbound packets are
 grouped by contact, while broadcast delivery is labelled **relayed by mesh** rather than claiming
 that every node received it.
 
@@ -26,6 +28,17 @@ The packet's Meshtastic source node is then mapped to a phone identity or Gatewa
 ten minutes. This means LilyGo radios can be exchanged between phones
 without swapping the visitor identities. Presence request and announcement frames are hidden from
 chat and from the Gateway message wall. Radio long names are only a compatibility fallback.
+
+Gateway chat uses the same proven shared-channel transport as the Bitcoin relay while keeping a
+separate visitor experience:
+
+```text
+DEMO_GATEWAY|1|<ALICE|BOB|CHARLIE|DANA>|<message>
+```
+
+The Gateway collector unwraps and displays the message. Participant apps consume the reserved frame
+without placing it in their broadcast or direct-message conversations. Person-to-person messages
+continue to use Meshtastic PKI direct messages.
 
 Before the conference, pair each phone with its physically attached Meshtastic radio in Android
 Bluetooth settings and remove any stale Meshtastic pairings. On first launch the app checks the

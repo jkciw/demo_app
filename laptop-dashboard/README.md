@@ -35,6 +35,17 @@ presence refresh request. These control frames are consumed by the collector and
 the public message list; incoming phone messages are labelled from the most recent app presence,
 not from a hard-coded LilyGo node ID.
 
+Phone messages addressed to the Gateway service use a reserved application envelope on the shared
+primary channel instead of a Meshtastic PKI direct message:
+
+```text
+DEMO_GATEWAY|1|<ALICE|BOB|CHARLIE|DANA>|<message>
+```
+
+The collector validates the station identity, removes the envelope, and displays only the human
+message. Other conference apps hide these frames. This keeps Gateway messaging independent of stale
+public-key entries after radios are reset or exchanged between phones.
+
 The serial connection intentionally skips the firmware's full NodeDB replay. The conference app
 learns all four phone identities and the Gateway address from presence frames, while avoiding an ESP32-S3 serial
 framing failure that can occur during a high-volume NodeDB synchronization.
