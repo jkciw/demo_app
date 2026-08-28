@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type TransportState = {
   status: "standby" | "connecting" | "reconnecting" | "online" | "error";
@@ -59,6 +59,11 @@ type Snapshot = {
   messages: Message[];
 };
 
+type BlockPresentation = {
+  transaction: BitcoinTransaction;
+  phase: "building" | "confirmed";
+};
+
 const SERVICE_URL = "http://127.0.0.1:8765";
 const emptySnapshot: Snapshot = {
   generatedAt: new Date().toISOString(),
@@ -84,6 +89,10 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
+function shortTxid(txid?: string) {
+  return txid ? `${txid.slice(0, 8)}…${txid.slice(-6)}` : "awaiting txid";
+}
+
 function TransportCard({
   name,
   state,
@@ -107,8 +116,14 @@ function TransportCard({
 export default function Home() {
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [serviceOnline, setServiceOnline] = useState(false);
+  const [blockPresentation, setBlockPresentation] = useState<BlockPresentation | null>(null);
+  const transactionStatuses = useRef(new Map<string, BitcoinTransaction["status"]>());
+  const presentationTimers = useRef<number[]>([]);
+  const pageOpenedAt = useRef(0);
+  const chainStage = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    pageOpenedAt.current = Date.now();
     let active = true;
     fetch(`${SERVICE_URL}/api/snapshot`)
       .then((response) => response.json())
@@ -139,12 +154,78 @@ export default function Home() {
     () => [...(snapshot.transactions ?? [])].reverse(),
     [snapshot.transactions],
   );
+
+  useEffect(() => {
+    const newlyConfirmed = transactions.find((transaction) => {
+      const previousStatus = transactionStatuses.current.get(transaction.id);
+      const firstSeenAfterPageOpened = previousStatus == null
+        && Date.parse(transaction.updatedAt) >= pageOpenedAt.current - 1000;
+      return transaction.status === "confirmed"
+        && ((previousStatus != null && previousStatus !== "confirmed") || firstSeenAfterPageOpened);
+    });
+
+    transactions.forEach((transaction) => {
+      transactionStatuses.current.set(transaction.id, transaction.status);
+    });
+
+    if (!newlyConfirmed) return;
+    presentationTimers.current.forEach((timer) => window.clearTimeout(timer));
+    setBlockPresentation({ transaction: newlyConfirmed, phase: "building" });
+    presentationTimers.current = [
+      window.setTimeout(() => {
+        setBlockPresentation({ transaction: newlyConfirmed, phase: "confirmed" });
+      }, 2600),
+      window.setTimeout(() => {
+        setBlockPresentation(null);
+        presentationTimers.current = [];
+      }, 6200),
+    ];
+  }, [transactions]);
+
+  useEffect(() => () => {
+    presentationTimers.current.forEach((timer) => window.clearTimeout(timer));
+  }, []);
+
   const meshtastic = snapshot.transports.meshtastic;
   const bitcoin = snapshot.bitcoin ?? emptySnapshot.bitcoin;
   const activeTransaction = transactions.find((transaction) =>
     ["reserved", "receiving", "broadcasting", "mining"].includes(transaction.status),
   );
   const queuedTransactions = transactions.filter((transaction) => transaction.status === "queued");
+  const blockCandidate = transactions.find((transaction) =>
+    ["receiving", "broadcasting", "mining"].includes(transaction.status),
+  );
+  const visualCandidate = blockCandidate
+    ?? (blockPresentation?.phase === "building" ? blockPresentation.transaction : undefined);
+  const displayedTipHeight = blockPresentation?.phase === "building"
+    && blockPresentation.transaction.blockHeight != null
+    ? blockPresentation.transaction.blockHeight - 1
+    : bitcoin.height;
+  const visibleConfirmedBlockCount = visualCandidate ? 4 : 5;
+
+  useEffect(() => {
+    const stage = chainStage.current;
+    if (!stage) return;
+    const frame = window.requestAnimationFrame(() => {
+      stage.scrollTo({ left: stage.scrollWidth, behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [blockPresentation?.phase, displayedTipHeight, visualCandidate?.id]);
+
+  const recentBlocks = useMemo(() => {
+    if (displayedTipHeight == null) return [];
+    const tipHeight = displayedTipHeight;
+    const firstHeight = Math.max(0, tipHeight - (visibleConfirmedBlockCount - 1));
+    return Array.from({ length: tipHeight - firstHeight + 1 }, (_, index) => {
+      const height = firstHeight + index;
+      return {
+        height,
+        transactions: transactions.filter(
+          (transaction) => transaction.status === "confirmed" && transaction.blockHeight === height,
+        ),
+      };
+    });
+  }, [displayedTipHeight, transactions, visibleConfirmedBlockCount]);
   const gatewayRadioOnline = serviceOnline && meshtastic.status === "online";
   const gatewayReady = gatewayRadioOnline && bitcoin.status === "online";
   const slotLabel = activeTransaction
@@ -246,6 +327,90 @@ export default function Home() {
               );
             })}
           </div>
+        </section>
+
+        <section className="chain-panel" aria-live="polite">
+          <div className="chain-heading">
+            <div>
+              <p className="section-label">REGTEST CHAIN</p>
+              <h2>Blocks mined by the Gateway</h2>
+            </div>
+            <div className="chain-tip-summary">
+              <span>TIP {displayedTipHeight ?? "—"}</span>
+              <small>ONE BLOCK PER DEMO TRANSACTION</small>
+            </div>
+          </div>
+
+          <div className="chain-stage" ref={chainStage}>
+            {recentBlocks.length === 0 ? (
+              <div className="chain-empty">Start Bitcoin Core to reveal the Regtest chain.</div>
+            ) : (
+              <div className="chain-track">
+                {recentBlocks.map((block, index) => {
+                  const phoneTransaction = block.transactions[0];
+                  const isTip = index === recentBlocks.length - 1;
+                  const isJustMined = blockPresentation?.phase === "confirmed"
+                    && phoneTransaction?.id === blockPresentation.transaction.id;
+                  return (
+                    <article
+                      className={`chain-block ${isTip ? "tip" : ""} ${phoneTransaction ? "contains-phone-tx" : ""} ${isJustMined ? "just-mined" : ""}`}
+                      key={block.height}
+                    >
+                      <div className="block-number">
+                        <span>BLOCK</span>
+                        <strong>{block.height}</strong>
+                      </div>
+                      <div className="block-cube" aria-hidden="true"><span /></div>
+                      <div className="block-payload">
+                        {phoneTransaction ? (
+                          <>
+                            <strong>{phoneTransaction.sender} TX MINED</strong>
+                            <code title={phoneTransaction.txid}>{shortTxid(phoneTransaction.txid)}</code>
+                          </>
+                        ) : (
+                          <>
+                            <strong>COINBASE BLOCK</strong>
+                            <small>No demo transaction</small>
+                          </>
+                        )}
+                      </div>
+                      {isJustMined
+                        ? <span className="tip-label mined-label">TX MINED · NEW TIP</span>
+                        : isTip && <span className="tip-label">CHAIN TIP</span>}
+                    </article>
+                  );
+                })}
+
+                {visualCandidate && (
+                  <article className={`chain-block candidate ${visualCandidate.status}`}>
+                    <div className="block-number">
+                      <span>NEXT BLOCK</span>
+                      <strong>{visualCandidate.blockHeight ?? (displayedTipHeight != null ? displayedTipHeight + 1 : "—")}</strong>
+                    </div>
+                    <div className="block-cube" aria-hidden="true"><span /></div>
+                    <div className="block-payload">
+                      <strong>
+                        {visualCandidate.sender} TX {visualCandidate.status === "receiving" ? "ARRIVING" : "MINING"}
+                      </strong>
+                      {visualCandidate.status === "receiving" ? (
+                        <code>{visualCandidate.chunksReceived ?? 0}/{visualCandidate.chunksTotal ?? "?"} CHUNKS RECEIVED</code>
+                      ) : (
+                        <code title={visualCandidate.txid}>{shortTxid(visualCandidate.txid)}</code>
+                      )}
+                    </div>
+                    <span className="mining-label">
+                      <i /> {visualCandidate.status === "receiving" ? "RECEIVING" : "BUILDING"}
+                    </span>
+                  </article>
+                )}
+              </div>
+            )}
+          </div>
+
+          <p className="chain-explainer">
+            The Gateway broadcasts the signed transaction to Bitcoin Core, mines one Regtest block,
+            and places the transaction inside the new chain tip.
+          </p>
         </section>
 
         <section className="message-panel">

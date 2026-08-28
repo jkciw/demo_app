@@ -78,6 +78,12 @@ def main() -> int:
     )
     raw_hex = child_signed["hex"]
     chunks = [raw_hex[index : index + 200] for index in range(0, len(raw_hex), 200)]
+    bridge.handle_text(
+        f"BTC_BEGIN|stage2smoke|{len(chunks)}",
+        "!smoke",
+        "Stage 2 smoke",
+        0,
+    )
     for index, chunk in enumerate(chunks, start=1):
         bridge.handle_text(
             f"BTC_TX|stage2smoke|{index}/{len(chunks)}|{chunk}",
@@ -89,23 +95,40 @@ def main() -> int:
     transaction = hub.snapshot()["transactions"][0]
     if transaction["status"] != "confirmed":
         raise RuntimeError(f"Bridge smoke failed: {transaction}")
-    if not any(reply.startswith("BTC_ACK|stage2smoke|") for reply in replies):
-        raise RuntimeError("Bridge did not return BTC_ACK")
-    if not any(reply.startswith("BTC_CONF|stage2smoke|") for reply in replies):
-        raise RuntimeError("Bridge did not return BTC_CONF")
+    if "BTC_READY|stage2smoke" not in replies:
+        raise RuntimeError("Bridge did not admit the smoke-test transfer")
+    chunk_acks = {
+        reply for reply in replies if reply.startswith("BTC_CHUNK_ACK|stage2smoke|")
+    }
+    if len(chunk_acks) != len(chunks):
+        raise RuntimeError(
+            f"Bridge returned {len(chunk_acks)} of {len(chunks)} chunk acknowledgements"
+        )
 
-    manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
-    for station in ("alpha", "bravo"):
-        for queued in manifest["phoneTransactions"][station]:
+    bridge.handle_text("BTC_RESULT_REQUEST|stage2smoke", "!smoke", "Stage 2 smoke", 0)
+    if not any(reply.startswith("BTC_RESULT|stage2smoke|") for reply in replies):
+        raise RuntimeError("Bridge did not return the confirmed transaction result")
+    bridge.handle_text("BTC_RESULT_ACK|stage2smoke", "!smoke", "Stage 2 smoke", 0)
+    transaction = hub.snapshot()["transactions"][0]
+    if not transaction.get("resultAcknowledged"):
+        raise RuntimeError("Bridge did not record the phone's result acknowledgement")
+
+    latest_queue_manifest = paths.generated / "phone-queue-latest.json"
+    manifest_path = latest_queue_manifest if latest_queue_manifest.exists() else paths.manifest
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    reserved_inputs = 0
+    for station, queue in manifest["phoneTransactions"].items():
+        for queued in queue:
             previous = queued["input"]
             if rpc.call("gettxout", previous["txid"], str(previous["vout"]), "true") is None:
                 raise RuntimeError(f"Smoke test touched reserved input {queued['id']}")
+            reserved_inputs += 1
 
     print("Stage 2 bridge smoke passed")
     print(f"  TXID:         {transaction['txid']}")
     print(f"  Block height: {transaction['blockHeight']}")
     print(f"  Chunks:       {len(chunks)}")
-    print("  Phone inputs: 4 still unspent")
+    print(f"  Phone inputs: {reserved_inputs} still unspent")
     return 0
 
 

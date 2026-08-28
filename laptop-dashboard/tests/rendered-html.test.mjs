@@ -34,6 +34,8 @@ test("server-renders the conference dashboard and Bitcoin relay", async () => {
   assert.match(html, /MESHTASTIC LINK/);
   assert.doesNotMatch(html, /Reticulum|LXMF|RNode/i);
   assert.match(html, /Transaction relay/);
+  assert.match(html, /REGTEST CHAIN/);
+  assert.match(html, /Blocks mined by the Gateway/);
   assert.match(html, /BITCOIN \/ REGTEST/);
   assert.match(html, /RPC port/);
   assert.match(html, />18443</);
@@ -53,7 +55,18 @@ test("client subscribes to collector snapshots and renders relay states", async 
   assert.match(page, /transaction\.status/);
   assert.match(page, /transaction\.txid/);
   assert.match(page, /transaction\.blockHeight/);
+  assert.match(page, /blockCandidate/);
+  assert.match(page, /blockPresentation/);
+  assert.match(page, /visualCandidate/);
+  assert.match(page, /visibleConfirmedBlockCount/);
+  assert.match(page, /stage\.scrollTo/);
+  assert.match(page, /CHUNKS RECEIVED/);
+  assert.match(page, /"receiving", "broadcasting", "mining"/);
+  assert.match(page, /recentBlocks/);
   assert.match(css, /\.transaction-panel/);
+  assert.match(css, /\.chain-panel/);
+  assert.match(css, /@keyframes block-arrival/);
+  assert.match(css, /@keyframes block-mined/);
   assert.match(css, /\.transaction-status\.confirmed/);
   assert.match(css, /\.transaction-status\.queued/);
   assert.match(bridge, /BTC_BEGIN/);

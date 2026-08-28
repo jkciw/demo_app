@@ -20,7 +20,7 @@ from bootstrap import (
 )
 
 
-DEFAULT_PER_PHONE = 20
+DEFAULT_PER_PHONE = 120
 PHONE_QUEUES = (
     ("alice", "regtest_transactions_alpha.txt"),
     ("bob", "regtest_transactions_bravo.txt"),
@@ -60,8 +60,8 @@ def main() -> int:
     args = parse_args()
     if args.per_phone < 1:
         raise RuntimeError("--per-phone must be at least 1")
-    if args.per_phone > 100:
-        raise RuntimeError("--per-phone cannot exceed 100 in one replenishment")
+    if args.per_phone > 200:
+        raise RuntimeError("--per-phone cannot exceed 200 in one replenishment")
 
     paths = Paths.resolve()
     start_node(paths)

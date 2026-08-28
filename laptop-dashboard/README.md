@@ -63,6 +63,12 @@ Alice / Bob / Charlie / Dana phones ─ LoRa mesh ─ Gateway USB radio ─ loca
 
 Messages and relay state are held in memory for the current run.
 
+The dashboard includes a compact **Regtest chain** view rather than a full block explorer. It shows
+the five most recent block heights, starts a candidate block as transaction chunks arrive over
+LoRa, and animates the new chain tip with the participant name and shortened TXID
+after confirmation. The view is derived from the existing Bitcoin Core height and in-memory relay
+state, so it does not require an indexer or an additional database.
+
 ## Bitcoin Regtest transaction relay
 
 `./dashboardctl start` also starts the isolated Regtest node created in Stage

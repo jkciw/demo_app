@@ -38,10 +38,11 @@ Replenish the APK with fresh, independent phone transactions without resetting
 the existing Regtest chain:
 
 ```sh
-python3 replenish_phone_transactions.py --per-phone 20
+python3 replenish_phone_transactions.py --per-phone 120
 ```
 
-This replaces the Alice, Bob, Charlie, and Dana queue assets in `meshtastic-demo` and writes an
+This replaces the Alice, Bob, Charlie, and Dana queue assets with 120 fresh transactions per
+identity in `meshtastic-demo` and writes an
 ignored audit manifest to `generated/phone-queue-latest.json`. Rebuild the APK
 after replenishing. Existing confirmed transactions and dashboard history remain
 valid.

@@ -87,8 +87,9 @@ Meshtastic app closed so only one phone app owns each radio.
 Install the universal APK on four phones. Select Alice, Bob, Charlie, and Dana respectively, then
 pair each phone with its physically attached radio. Confirm that every app shows its selected
 identity and actual radio name. With Wi-Fi and cellular disabled, verify the direct-message ring
-Alice → Bob → Charlie → Dana → Alice, then send one broadcast from each phone. Full acceptance of
-this preview requires all four phones and radios; the proven two-phone build remains on `main`.
+Alice → Bob → Charlie → Dana → Alice, then send one broadcast from each phone. This final
+conference candidate is maintained on `four-station-mesh` and requires all four phones and radios
+for the complete attendee experience.
 
 This project links to GPL-3.0-or-later Meshtastic SDK code and is therefore maintained and
 distributed under GPL-3.0-or-later terms.
@@ -97,9 +98,14 @@ distributed under GPL-3.0-or-later terms.
 
 The universal APK packages independent Alice, Bob, Charlie, and Dana Regtest transaction queues
 under `assets/regtest_transactions_*.txt`. The selected runtime station role chooses the queue.
+The final conference build carries 120 fresh, mutually independent transactions for each identity.
 Replenish all four queues from the live demo chain with
 `laptop-dashboard/regtest/replenish_phone_transactions.py`. Each line is one complete signed raw
 transaction hex.
+
+Before packaging a release, validate the transaction count, encoding, size, and cross-phone
+uniqueness with `python3 scripts/verify_transaction_assets.py`. The Android build workflow runs the
+same check before compiling the APK.
 
 On the home screen, **RELAY NEXT SIGNED TRANSACTION** first requests the Gateway's single upload
 slot. If several phones request it together, the first decoded request becomes active and the others

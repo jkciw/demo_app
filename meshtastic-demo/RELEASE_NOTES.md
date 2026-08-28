@@ -1,9 +1,7 @@
-# Meshtastic Conference Demo v0.4.0-beta.6
+# Meshtastic Conference Demo v0.4.0-rc.1
 
-This is the four-station software preview built from `four-station-mesh`. The same universal APK is
+This is the final four-station conference candidate built from `four-station-mesh`. The same universal APK is
 used on every participant phone; choose **Alice**, **Bob**, **Charlie**, or **Dana** inside the app.
-The hardware-proven v0.3.3 release on `main` remains the conference fallback until the five-radio
-acceptance gate passes.
 
 ## What changed
 
@@ -28,6 +26,9 @@ acceptance gate passes.
 - **Bitcoin confirmation is visibly active:** once all chunks reach the Gateway node, an animated
   hourglass appears while the phone polls the Gateway for the confirmed transaction result. It
   disappears automatically on confirmation or failure.
+- **The Regtest chain is visible:** the Gateway dashboard shows the five latest blocks, starts an
+  always-visible candidate as signed-transaction chunks arrive over LoRa, and turns it into an
+  animated chain tip labelled with the participant and shortened TXID after mining.
 - **Gateway language is consistent:** attendee-facing routes, status messages, confirmation text,
   and errors describe the service as the **Gateway node**, without exposing its current host device.
 - **Four visitor identities are ready:** every phone shows the other three participants as direct
@@ -38,7 +39,7 @@ acceptance gate passes.
   of four 100-character chunks, and Gateway replies are paced at one-second intervals.
 - **Radio configuration is visible:** the dashboard reports the modem preset and region read from
   the connected Gateway rather than displaying a hard-coded LongFast label.
-- **Fresh transactions are ready:** all four identities receive 20 independently funded, presigned
+- **Fresh transactions are ready:** all four identities receive 120 independently funded, presigned
   Regtest transactions, with a repeatable replenishment tool for future testing.
 - **Conference scope is focused:** the attendee-facing app, Gateway console, and operating guide now
   present only the tested Meshtastic experience; unfinished Reticulum placeholders are hidden.

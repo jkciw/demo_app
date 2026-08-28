@@ -89,6 +89,9 @@ jobs:
           fi
           echo "Conference signing certificate verified: ${actual_fingerprint}"
 
+      - name: Verify packaged Regtest transaction queues
+        run: python3 scripts/verify_transaction_assets.py
+
       - name: Test, lint, and build universal APK
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 
@@ -235,7 +238,7 @@ jobs:
           fi
 
           tag="meshtastic-preview-v${version}-${GITHUB_SHA:0:7}"
-          title="Meshtastic Conference Demo v${version} — four-station preview"
+          title="Meshtastic Conference Demo v${version} — final four-station conference candidate"
           notes="meshtastic-demo/RELEASE_NOTES.md"
           apk="release/Meshtastic-Conference-Demo.apk"
           checksum="release/Meshtastic-Conference-Demo.apk.sha256"
